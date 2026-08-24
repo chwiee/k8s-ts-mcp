@@ -13,14 +13,30 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// bearerRoundTripper injects "Authorization: Bearer <token>" on every
+// request — how a real calling agent (see internal/agentauth) presents its
+// scoped token to hub-server.
+type bearerRoundTripper struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (rt *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+rt.token)
+	return rt.base.RoundTrip(req)
+}
 
 func main() {
 	endpoint := flag.String("endpoint", "http://localhost:8443", "endereço MCP (Streamable HTTP) do hub-server")
 	tool := flag.String("tool", "list_clusters", "nome da tool a chamar (list_clusters, troubleshoot, get_postmortem)")
 	args := flag.String("args", "{}", "argumentos da tool, como JSON")
+	token := flag.String("token", "", "token do agente chamador (ver internal/agentauth) — vazio simula um chamador sem token")
 	flag.Parse()
 
 	var arguments map[string]any
@@ -28,9 +44,14 @@ func main() {
 		log.Fatalf("smoketest: parseando --args: %v", err)
 	}
 
+	transport := &mcp.StreamableClientTransport{Endpoint: *endpoint}
+	if *token != "" {
+		transport.HTTPClient = &http.Client{Transport: &bearerRoundTripper{token: *token, base: http.DefaultTransport}}
+	}
+
 	ctx := context.Background()
 	client := mcp.NewClient(&mcp.Implementation{Name: "smoketest", Version: "0.0.1"}, nil)
-	cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: *endpoint}, nil)
+	cs, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		log.Fatalf("smoketest: conectando em %s: %v", *endpoint, err)
 	}
