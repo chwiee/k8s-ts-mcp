@@ -20,7 +20,9 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 
+	"github.com/chwiee/k8s-ts-mcp/internal/agentauth"
 	"github.com/chwiee/k8s-ts-mcp/internal/audit"
+	"github.com/chwiee/k8s-ts-mcp/internal/inventory"
 	"github.com/chwiee/k8s-ts-mcp/internal/mcptools"
 	"github.com/chwiee/k8s-ts-mcp/internal/playbooks"
 	"github.com/chwiee/k8s-ts-mcp/internal/playbooks/calico"
@@ -51,8 +53,10 @@ func main() {
 	selfAddr := flag.String("self-addr", envOr("SELF_ADDR", ""), "endereço desta réplica, alcançável por outras réplicas (ex: $(POD_IP):7443) — obrigatório se --redis-addr for informado")
 	runbooksPath := flag.String("runbooks-path", envOr("RUNBOOKS_PATH", ""), "caminho do markdown de runbooks (ver docs/runbooks/kubernetes-errors.md) — vazio desliga o fallback pra sinais sem playbook automatizado")
 	runbooksReloadEvery := flag.Duration("runbooks-reload-interval", 30*time.Second, "intervalo de releitura automática do arquivo de runbooks (pega edição sem reiniciar)")
-	roleClustersConfigPath := flag.String("role-clusters-config", envOr("ROLE_CLUSTERS_CONFIG_PATH", ""), "caminho do YAML de clusters alcançados via IAM Role da AWS em vez de cluster-agent (ver internal/rolecluster) — vazio desliga esse caminho inteiramente")
 	calicoNS := flag.String("calico-namespace", envOr("CALICO_NAMESPACE", "calico-system"), "namespace do DaemonSet calico-node, usado pelos clusters via Role (mesmo default do cluster-agent)")
+	clusterInventoryPath := flag.String("cluster-inventory-path", envOr("CLUSTER_INVENTORY_PATH", ""), "caminho do YAML de inventário de clusters pra uso local/dev (cluster_id -> aws_account_id/region/eks_cluster_name, ver internal/inventory) — ignorado se --inventory-api-url for informado")
+	inventoryAPIURL := flag.String("inventory-api-url", envOr("INVENTORY_API_URL", ""), "URL base da API de inventário de clusters da empresa (ver internal/inventory.HTTPClient) — tem prioridade sobre --cluster-inventory-path quando os dois são informados")
+	agentScopesConfigPath := flag.String("agent-scopes-config", envOr("AGENT_SCOPES_CONFIG_PATH", ""), "caminho do YAML de token->contas AWS permitidas por agente chamador (ver internal/agentauth) — vazio desliga a checagem de escopo de conta (modo dev/local)")
 	flag.Parse()
 
 	groups, err := loadGroupMapping(*groupMappingPath)
@@ -95,16 +99,35 @@ func main() {
 		log.Printf("hub-server: --redis-addr não informado — registro só em memória, modo réplica única (não escale hub-server > 1 réplica assim)")
 	}
 
-	if *roleClustersConfigPath != "" {
-		f, err := os.Open(*roleClustersConfigPath)
+	// clusterInventory answers "what AWS account/region is cluster_id in?"
+	// — the one thing internal/rolecluster needs to reach a cluster purely
+	// by IRSA-role naming convention (no per-cluster registration), and
+	// what mcptools uses to enforce AgentScope below. --inventory-api-url
+	// (the company's real inventory API) wins when both are set;
+	// --cluster-inventory-path (a static YAML) exists for local/dev use,
+	// e.g. testing against Floci.
+	var clusterInventory inventory.Lookup
+	switch {
+	case *inventoryAPIURL != "":
+		clusterInventory = &inventory.HTTPClient{BaseURL: *inventoryAPIURL}
+		log.Printf("hub-server: inventário de clusters via API em %s", *inventoryAPIURL)
+	case *clusterInventoryPath != "":
+		f, err := os.Open(*clusterInventoryPath)
 		if err != nil {
-			log.Fatalf("hub-server: abrindo --role-clusters-config: %v", err)
+			log.Fatalf("hub-server: abrindo --cluster-inventory-path: %v", err)
 		}
-		roleCfg, err := rolecluster.LoadConfig(f)
+		invCfg, err := inventory.LoadConfig(f)
 		f.Close()
 		if err != nil {
-			log.Fatalf("hub-server: lendo --role-clusters-config: %v", err)
+			log.Fatalf("hub-server: lendo --cluster-inventory-path: %v", err)
 		}
+		clusterInventory = inventory.New(invCfg.Clusters)
+		log.Printf("hub-server: %d cluster(s) carregados no inventário local de %s", len(invCfg.Clusters), *clusterInventoryPath)
+	default:
+		log.Printf("hub-server: nenhum --inventory-api-url nem --cluster-inventory-path informado — sem descoberta de cluster via IAM Role, e list_nodes não terá contexto de conta/região")
+	}
+
+	if clusterInventory != nil {
 		// Same playbook set cluster-agent registers — a Role-based cluster
 		// runs identical diagnose/execute/scan logic, just without a
 		// separate agent process or gRPC hop (see internal/rolecluster).
@@ -116,8 +139,24 @@ func main() {
 			calico.NodeDegraded{Namespace: *calicoNS},
 			keda.ScaledObjectStuck{},
 		)
-		hub.RoleResolver = rolecluster.NewManager(roleCfg.Clusters, roleRegistry)
-		log.Printf("hub-server: %d cluster(s) via IAM Role carregados de %s", len(roleCfg.Clusters), *roleClustersConfigPath)
+		hub.RoleResolver = rolecluster.NewManager(clusterInventory, roleRegistry)
+	}
+
+	var agentRegistry *agentauth.Registry
+	if *agentScopesConfigPath != "" {
+		f, err := os.Open(*agentScopesConfigPath)
+		if err != nil {
+			log.Fatalf("hub-server: abrindo --agent-scopes-config: %v", err)
+		}
+		agentCfg, err := agentauth.LoadConfig(f)
+		f.Close()
+		if err != nil {
+			log.Fatalf("hub-server: lendo --agent-scopes-config: %v", err)
+		}
+		agentRegistry = agentauth.NewRegistry(agentCfg.Agents)
+		log.Printf("hub-server: %d agente(s) carregados de %s — escopo de conta AWS por chamador está ATIVO", len(agentCfg.Agents), *agentScopesConfigPath)
+	} else {
+		log.Printf("hub-server: nenhum --agent-scopes-config informado — sem checagem de escopo de conta por chamador (modo dev/local)")
 	}
 
 	var runbooksStore *runbooks.Store
@@ -142,13 +181,10 @@ func main() {
 		ProdClusters:  toSet(*prodClustersCSV),
 		CallerGroups:  splitCSV(*testCallerGroupsCSV),
 		Runbooks:      runbooksStore,
+		Inventory:     clusterInventory,
 	}
 
-	mcpServer := mcp.NewServer(&mcp.Implementation{
-		Name:    "k8s-ts-mcp",
-		Version: "0.1.0",
-	}, &mcp.ServerOptions{
-		Instructions: "Ferramentas de troubleshooting preditivo de Kubernetes para a frota de clusters da empresa. " +
+	mcpInstructions := "Ferramentas de troubleshooting preditivo de Kubernetes para a frota de clusters da empresa. " +
 			"Use list_clusters se não tiver certeza do cluster_id exato. Se o usuário não souber o nome de um pod " +
 			"específico (ex: \"valide os pods do spoke-1\", \"tem algo quebrado nesse cluster?\"), use scan_cluster " +
 			"primeiro para descobrir o que está com problema, e só depois chame troubleshoot com o kind/namespace/name " +
@@ -161,9 +197,44 @@ func main() {
 			"dela ao usuário e pergunte explicitamente se ele quer aprovar essa ação específica — só chame " +
 			"approve_action depois de uma confirmação clara do usuário (\"sim\", \"pode aprovar\", etc.), nunca por " +
 			"conta própria; se o usuário não confirmar, não chame. Use get_postmortem para recuperar o resumo de um " +
-			"incidente já tratado.",
-	})
-	mcptools.Register(mcpServer, tools)
+			"incidente já tratado. Todos os clusters da empresa são clusters cloud (EKS) — em qualquer tool que peça " +
+			"cluster_id, se o usuário não informar explicitamente qual cluster (mesmo que ele mencione uma região ou " +
+			"conta AWS), pergunte antes de chamar a tool; nunca escolha um cluster sozinho."
+
+	// newSessionServer builds a fresh *mcp.Server per new MCP session (the
+	// go-sdk's Streamable HTTP handler calls this once per session, with
+	// that session's initiating request — see NewStreamableHTTPHandler's
+	// doc comment), resolving AgentScope from the session's Authorization
+	// header. This is deliberately NOT one shared *mcp.Server for every
+	// caller: AgentScope has to be per-caller, and mcptools.Server is a
+	// plain struct (not goroutine-shared mutable state beyond the pointers
+	// it holds), so a cheap shallow copy per session is enough — Hub/
+	// Policy/Audit/Runbooks/Inventory stay the same shared instances,
+	// only AgentScope differs.
+	newSessionServer := func(req *http.Request) *mcp.Server {
+		sessionTools := *tools
+		if agentRegistry != nil {
+			token := agentauth.TokenFromHeader(req.Header)
+			scope, ok := agentRegistry.Resolve(token)
+			if !ok {
+				// A hub with --agent-scopes-config configured requires a
+				// valid token on every session — a missing or unrecognized
+				// one must fail closed (deny every account), never fall
+				// back to AgentScope==nil's permissive default, which is
+				// reserved for "no --agent-scopes-config at all."
+				log.Printf("hub-server: sessão MCP sem token de agente reconhecido — negando acesso a qualquer conta")
+				scope = agentauth.DenyAllScope
+			}
+			sessionTools.AgentScope = scope
+		}
+
+		srv := mcp.NewServer(&mcp.Implementation{
+			Name:    "k8s-ts-mcp",
+			Version: "0.1.0",
+		}, &mcp.ServerOptions{Instructions: mcpInstructions})
+		mcptools.Register(srv, &sessionTools)
+		return srv
+	}
 
 	grpcCreds, err := tlsutil.ServerCredentials(*certFile, *keyFile, *caFile, *insecureMode)
 	if err != nil {
@@ -184,7 +255,7 @@ func main() {
 		}
 	}()
 
-	httpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil)
+	httpHandler := mcp.NewStreamableHTTPHandler(newSessionServer, nil)
 	httpServer := &http.Server{Addr: *httpAddr, Handler: httpHandler}
 	go func() {
 		log.Printf("hub-server: MCP (Streamable HTTP) ouvindo em %s", *httpAddr)
