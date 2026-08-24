@@ -12,8 +12,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/chwiee/k8s-ts-mcp/internal/agentauth"
 	"github.com/chwiee/k8s-ts-mcp/internal/audit"
 	"github.com/chwiee/k8s-ts-mcp/internal/execengine"
+	"github.com/chwiee/k8s-ts-mcp/internal/inventory"
 	"github.com/chwiee/k8s-ts-mcp/internal/policy"
 	"github.com/chwiee/k8s-ts-mcp/internal/postmortem"
 	"github.com/chwiee/k8s-ts-mcp/internal/runbooks"
@@ -45,6 +47,53 @@ type Server struct {
 	// no compiled playbook matches a signal at all. Nil is valid — that
 	// case just means no runbook fallback text is available.
 	Runbooks *runbooks.Store
+	// Inventory answers "what AWS account/region is this cluster_id in?" —
+	// every cluster the company runs is cloud (EKS), so tools use this both
+	// to confirm a caller-supplied region actually matches the cluster, and
+	// (with AgentScope) to enforce which AWS account a caller may touch at
+	// all. Nil is valid — checkClusterScope then just can't report
+	// account/region context or enforce AgentScope, but tools still work
+	// (same permissive default as AgentScope==nil).
+	Inventory inventory.Lookup
+	// AgentScope, when set, restricts every tool that touches a specific
+	// cluster (scan_cluster, troubleshoot, approve_action, list_nodes) to
+	// clusters whose AWS account is in the calling agent's token scope —
+	// see internal/agentauth and checkClusterScope below. Resolved once per
+	// MCP session from the request's Authorization header (see
+	// cmd/hub-server), never shared across callers with different tokens.
+	// Nil means no --agent-scopes-config was configured at all, or this
+	// particular caller presented no matching token on a hub that doesn't
+	// require one — permissive by design, same as every other optional
+	// config in this package.
+	AgentScope *agentauth.Scope
+}
+
+// checkClusterScope resolves clusterID via Inventory (when configured) and
+// confirms AgentScope (when set) allows that cluster's AWS account. Every
+// tool that reaches out to a specific cluster calls this first — a request
+// for a cluster outside the caller's scope is refused before any
+// AWS/Kubernetes call is attempted, not just before letting the result
+// through (see docs/ARCHITECTURE.md's account-isolation design). When
+// AgentScope is nil this never refuses anything; info/known are still
+// useful to callers that want inventory context regardless (e.g.
+// list_nodes' account_id/region in its response).
+func (s *Server) checkClusterScope(ctx context.Context, clusterID string) (info inventory.ClusterInfo, known bool, err error) {
+	if s.Inventory != nil {
+		info, known, err = s.Inventory.Lookup(ctx, clusterID)
+		if err != nil {
+			return inventory.ClusterInfo{}, false, fmt.Errorf("consultando inventário de clusters: %w", err)
+		}
+	}
+	if s.AgentScope == nil {
+		return info, known, nil
+	}
+	if !known {
+		return inventory.ClusterInfo{}, false, fmt.Errorf("cluster %q não está cadastrado no inventário — não é possível validar a conta AWS para este chamador, acesso negado", clusterID)
+	}
+	if !s.AgentScope.AllowsAccount(info.AWSAccountID) {
+		return inventory.ClusterInfo{}, false, fmt.Errorf("cluster %q está fora do escopo de conta AWS autorizado para este chamador", clusterID)
+	}
+	return info, known, nil
 }
 
 func (s *Server) clusterEnv(clusterID string) policy.ClusterEnv {
@@ -90,12 +139,15 @@ func maxRisk(actions []*pb.ProposedAction) policy.RiskLevel {
 }
 
 // Register wires every tool onto server.
+//
+// list_clusters is deliberately NOT registered right now: cluster discovery
+// moved to purely convention-based resolution (cluster_id -> AWS
+// account/region via internal/inventory, no pre-enumerated catalog — see
+// internal/rolecluster), so there is no longer a real "list of every
+// cluster" for it to return. Re-enable once the company's inventory API
+// exposes a real by-scope listing endpoint; listClustersHandler below is
+// kept working (and tested) for that reintegration, just not wired here.
 func Register(server *mcp.Server, s *Server) {
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_clusters",
-		Description: "Lista os clusters atualmente conectados ao hub e disponíveis para troubleshooting.",
-	}, s.listClustersHandler())
-
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "scan_cluster",
 		Description: "Lista os pods com problema num cluster — use isto ANTES de troubleshoot sempre que o usuário " +
@@ -134,6 +186,19 @@ func Register(server *mcp.Server, s *Server) {
 		Name:        "get_postmortem",
 		Description: "Retorna o post-mortem em texto simples de um incidente, pelo incident_id retornado por troubleshoot.",
 	}, s.postmortemHandler())
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "list_nodes",
+		Description: "Lista os nodes de um cluster: nome, zona, região, tipo de instância, arquitetura e se está " +
+			"Ready. Todos os clusters da empresa são clusters cloud (EKS) — SEMPRE pergunte ao usuário o cluster_id " +
+			"exato se ele não tiver sido informado explicitamente, mesmo que ele só tenha mencionado uma região ou " +
+			"conta AWS (várias contas/regiões podem ter cluster ativo); nunca adivinhe qual cluster ele quer dizer. " +
+			"Use list_clusters primeiro se não tiver certeza do cluster_id exato. O parâmetro region é opcional e só " +
+			"serve para confirmar contra o inventário de clusters — se o cluster estiver numa região diferente da " +
+			"informada, a tool retorna erro em vez de listar os nodes do cluster errado. A resposta também traz " +
+			"aws_account_id/region/eks_cluster_name do inventário quando conhecidos (inventory_known=false quando o " +
+			"cluster não está cadastrado no inventário — reporte isso ao usuário em vez de inventar a região).",
+	}, s.listNodesHandler())
 }
 
 type ListClustersOut struct {
@@ -158,6 +223,10 @@ type ScanClusterOut struct {
 
 func (s *Server) scanClusterHandler() mcp.ToolHandlerFor[ScanClusterIn, ScanClusterOut] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in ScanClusterIn) (*mcp.CallToolResult, ScanClusterOut, error) {
+		if _, _, err := s.checkClusterScope(ctx, in.ClusterID); err != nil {
+			return nil, ScanClusterOut{}, err
+		}
+
 		resp, err := s.Hub.Scan(ctx, in.ClusterID, in.Namespace)
 		if err != nil {
 			return nil, ScanClusterOut{}, err
@@ -168,6 +237,66 @@ func (s *Server) scanClusterHandler() mcp.ToolHandlerFor[ScanClusterIn, ScanClus
 		out := ScanClusterOut{Issues: make([]PodIssueOut, 0, len(resp.Issues))}
 		for _, i := range resp.Issues {
 			out.Issues = append(out.Issues, PodIssueOut{Namespace: i.Namespace, Name: i.Name, Kind: i.Kind, Detail: i.Detail})
+		}
+		return nil, out, nil
+	}
+}
+
+type ListNodesIn struct {
+	ClusterID string `json:"cluster_id" jsonschema:"identificador do cluster registrado no hub — use list_clusters se não tiver certeza do ID exato. SEMPRE pergunte ao usuário se ele não tiver informado explicitamente."`
+	Region    string `json:"region,omitempty" jsonschema:"região AWS esperada (ex: us-east-1) — opcional, usada só para conferir contra o inventário de clusters antes de listar"`
+}
+
+type NodeOut struct {
+	Name         string `json:"name"`
+	Zone         string `json:"zone,omitempty"`
+	Region       string `json:"region,omitempty"`
+	InstanceType string `json:"instance_type,omitempty"`
+	Architecture string `json:"architecture,omitempty"`
+	Ready        bool   `json:"ready"`
+}
+
+type ListNodesOut struct {
+	ClusterID string `json:"cluster_id"`
+	// InventoryKnown is false when Inventory has no entry for cluster_id at
+	// all — AWSAccountID/Region/EKSClusterName below are then meaningless
+	// zero values, not "cluster has no account/region".
+	InventoryKnown bool      `json:"inventory_known"`
+	AWSAccountID   string    `json:"aws_account_id,omitempty"`
+	Region         string    `json:"region,omitempty"`
+	EKSClusterName string    `json:"eks_cluster_name,omitempty"`
+	Nodes          []NodeOut `json:"nodes"`
+}
+
+func (s *Server) listNodesHandler() mcp.ToolHandlerFor[ListNodesIn, ListNodesOut] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListNodesIn) (*mcp.CallToolResult, ListNodesOut, error) {
+		info, known, err := s.checkClusterScope(ctx, in.ClusterID)
+		if err != nil {
+			return nil, ListNodesOut{}, err
+		}
+		if in.Region != "" && known && info.Region != "" && !strings.EqualFold(info.Region, in.Region) {
+			return nil, ListNodesOut{}, fmt.Errorf("cluster %q está registrado no inventário como região %s, não %s — confirme o cluster certo com o usuário antes de continuar", in.ClusterID, info.Region, in.Region)
+		}
+
+		resp, err := s.Hub.ListNodes(ctx, in.ClusterID)
+		if err != nil {
+			return nil, ListNodesOut{}, err
+		}
+		if resp.Error != "" {
+			return nil, ListNodesOut{}, fmt.Errorf("agente do cluster %s: %s", in.ClusterID, resp.Error)
+		}
+
+		out := ListNodesOut{ClusterID: in.ClusterID, InventoryKnown: known, Nodes: make([]NodeOut, 0, len(resp.Nodes))}
+		if known {
+			out.AWSAccountID = info.AWSAccountID
+			out.Region = info.Region
+			out.EKSClusterName = info.EKSClusterName
+		}
+		for _, n := range resp.Nodes {
+			out.Nodes = append(out.Nodes, NodeOut{
+				Name: n.Name, Zone: n.Zone, Region: n.Region,
+				InstanceType: n.InstanceType, Architecture: n.Architecture, Ready: n.Ready,
+			})
 		}
 		return nil, out, nil
 	}
@@ -216,6 +345,10 @@ type TroubleshootOut struct {
 
 func (s *Server) troubleshootHandler() mcp.ToolHandlerFor[TroubleshootIn, TroubleshootOut] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in TroubleshootIn) (*mcp.CallToolResult, TroubleshootOut, error) {
+		if _, _, err := s.checkClusterScope(ctx, in.ClusterID); err != nil {
+			return nil, TroubleshootOut{}, err
+		}
+
 		sig := &pb.Signal{Kind: in.Kind, Namespace: in.Namespace, Name: in.Name, NodeName: in.NodeName}
 
 		diag, err := s.Hub.Diagnose(ctx, in.ClusterID, sig)
@@ -392,6 +525,9 @@ func (s *Server) approveActionHandler() mcp.ToolHandlerFor[ApproveActionIn, Appr
 		}
 		if !ok {
 			return nil, ApproveActionOut{}, fmt.Errorf("incidente %q não encontrado", in.IncidentID)
+		}
+		if _, _, err := s.checkClusterScope(ctx, entry.ClusterID); err != nil {
+			return nil, ApproveActionOut{}, err
 		}
 
 		var target *audit.ProposedActionRecord

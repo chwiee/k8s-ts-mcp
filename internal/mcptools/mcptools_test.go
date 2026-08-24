@@ -14,7 +14,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/chwiee/k8s-ts-mcp/internal/agentauth"
 	"github.com/chwiee/k8s-ts-mcp/internal/audit"
+	"github.com/chwiee/k8s-ts-mcp/internal/inventory"
 	"github.com/chwiee/k8s-ts-mcp/internal/policy"
 	"github.com/chwiee/k8s-ts-mcp/internal/runbooks"
 	"github.com/chwiee/k8s-ts-mcp/internal/transport"
@@ -47,6 +49,10 @@ func (fakeHandler) GetLogs(_ context.Context, ns, name, deployment string, _ int
 		return "log do deployment " + deployment, nil
 	}
 	return "log de " + ns + "/" + name, nil
+}
+
+func (fakeHandler) ListNodes(_ context.Context) ([]*pb.NodeInfo, error) {
+	return []*pb.NodeInfo{{Name: "spoke-1-control-plane", Zone: "us-east-1a", Region: "us-east-1", InstanceType: "t3.medium", Architecture: "amd64", Ready: true}}, nil
 }
 
 // mixedRiskHandler simulates a playbook shaped like core/oomkilled: one safe
@@ -97,6 +103,10 @@ func (mixedRiskHandler) GetLogs(_ context.Context, ns, name, deployment string, 
 	return "log de " + ns + "/" + name, nil
 }
 
+func (mixedRiskHandler) ListNodes(_ context.Context) ([]*pb.NodeInfo, error) {
+	return []*pb.NodeInfo{{Name: "spoke-1-control-plane", Zone: "us-east-1a", Region: "us-east-1", InstanceType: "t3.medium", Architecture: "amd64", Ready: true}}, nil
+}
+
 // noPlaybookHandler simulates a signal no compiled playbook covers — the
 // runbook fallback path. Logs, when set, is what GetLogs returns — used to
 // test runbookFallback's log_signatures matching without a real cluster.
@@ -122,6 +132,10 @@ func (noPlaybookHandler) ApproveAction(context.Context, string, *pb.Signal, stri
 
 func (h noPlaybookHandler) GetLogs(context.Context, string, string, string, int64) (string, error) {
 	return h.Logs, nil
+}
+
+func (noPlaybookHandler) ListNodes(context.Context) ([]*pb.NodeInfo, error) {
+	return nil, nil
 }
 
 // newTestServer wires a real bufconn hub<->agent connection (cluster
@@ -426,6 +440,132 @@ func TestScanCluster(t *testing.T) {
 	}
 	if len(out.Issues) != 1 || out.Issues[0].Kind != "PodCrashLoopBackOff" || out.Issues[0].Name != "nginx-abc" {
 		t.Errorf("Issues = %+v, want one PodCrashLoopBackOff/nginx-abc entry", out.Issues)
+	}
+}
+
+func TestListNodes_NoInventory(t *testing.T) {
+	s := newTestServer(t, policy.GroupMapping{"infra-prod-admins": policy.TierProdAdmin})
+	s.CallerGroups = []string{"infra-prod-admins"}
+
+	_, out, err := s.listNodesHandler()(context.Background(), nil, ListNodesIn{ClusterID: "spoke-1"})
+	if err != nil {
+		t.Fatalf("list_nodes: %v", err)
+	}
+	if out.InventoryKnown {
+		t.Errorf("InventoryKnown = true, want false — Server.Inventory is nil in this test")
+	}
+	if out.AWSAccountID != "" || out.Region != "" {
+		t.Errorf("out = %+v, want empty account/region when the cluster isn't in the inventory", out)
+	}
+	if len(out.Nodes) != 1 || out.Nodes[0].Name != "spoke-1-control-plane" {
+		t.Errorf("Nodes = %+v, want one node named spoke-1-control-plane", out.Nodes)
+	}
+}
+
+func TestListNodes_InventoryMatch(t *testing.T) {
+	s := newTestServer(t, policy.GroupMapping{"infra-prod-admins": policy.TierProdAdmin})
+	s.CallerGroups = []string{"infra-prod-admins"}
+	s.Inventory = inventory.New([]inventory.ClusterInfo{
+		{ClusterID: "spoke-1", AWSAccountID: "000000000000", Region: "us-east-1", EKSClusterName: "probe-cluster"},
+	})
+
+	_, out, err := s.listNodesHandler()(context.Background(), nil, ListNodesIn{ClusterID: "spoke-1", Region: "us-east-1"})
+	if err != nil {
+		t.Fatalf("list_nodes: %v", err)
+	}
+	if !out.InventoryKnown || out.AWSAccountID != "000000000000" || out.Region != "us-east-1" || out.EKSClusterName != "probe-cluster" {
+		t.Errorf("out = %+v, want the inventory's account/region/eks_cluster_name", out)
+	}
+	if len(out.Nodes) != 1 {
+		t.Errorf("Nodes = %+v, want one node", out.Nodes)
+	}
+}
+
+// scopeAllowing builds an *agentauth.Scope authorizing exactly the given
+// AWS account IDs, going through agentauth.Registry.Resolve like a real
+// token lookup would — not constructed by hand — so these tests exercise
+// the same path production wiring does.
+func scopeAllowing(t *testing.T, accounts ...string) *agentauth.Scope {
+	t.Helper()
+	reg := agentauth.NewRegistry([]agentauth.AgentConfig{
+		{Name: "mars-agent", Token: "t", AllowedAccounts: accounts},
+	})
+	scope, ok := reg.Resolve("t")
+	if !ok {
+		t.Fatal("Resolve(t) = not found, want found")
+	}
+	return scope
+}
+
+func TestCheckClusterScope_NilAgentScopeUnrestricted(t *testing.T) {
+	s := newTestServer(t, policy.GroupMapping{"infra-prod-admins": policy.TierProdAdmin})
+	s.Inventory = inventory.New([]inventory.ClusterInfo{
+		{ClusterID: "spoke-1", AWSAccountID: "999999999999", Region: "us-east-1"},
+	})
+	// s.AgentScope is nil (no --agent-scopes-config) — must never refuse.
+	if _, _, err := s.checkClusterScope(context.Background(), "spoke-1"); err != nil {
+		t.Fatalf("checkClusterScope with nil AgentScope: %v", err)
+	}
+}
+
+func TestCheckClusterScope_AllowedAccount(t *testing.T) {
+	s := newTestServer(t, policy.GroupMapping{"infra-prod-admins": policy.TierProdAdmin})
+	s.Inventory = inventory.New([]inventory.ClusterInfo{
+		{ClusterID: "spoke-1", AWSAccountID: "123456789012", Region: "us-east-1"},
+	})
+	s.AgentScope = scopeAllowing(t, "123456789012")
+
+	if _, _, err := s.checkClusterScope(context.Background(), "spoke-1"); err != nil {
+		t.Fatalf("checkClusterScope for an in-scope account: %v", err)
+	}
+}
+
+func TestCheckClusterScope_DeniedAccount(t *testing.T) {
+	s := newTestServer(t, policy.GroupMapping{"infra-prod-admins": policy.TierProdAdmin})
+	s.Inventory = inventory.New([]inventory.ClusterInfo{
+		{ClusterID: "spoke-1", AWSAccountID: "999999999999", Region: "us-east-1"},
+	})
+	s.AgentScope = scopeAllowing(t, "123456789012")
+
+	if _, _, err := s.checkClusterScope(context.Background(), "spoke-1"); err == nil {
+		t.Fatal("checkClusterScope allowed a cluster in an account outside the agent's scope, want an error")
+	}
+}
+
+func TestCheckClusterScope_UnknownClusterDeniedWhenScoped(t *testing.T) {
+	s := newTestServer(t, policy.GroupMapping{"infra-prod-admins": policy.TierProdAdmin})
+	// No Inventory entry for spoke-1 at all.
+	s.AgentScope = scopeAllowing(t, "123456789012")
+
+	if _, _, err := s.checkClusterScope(context.Background(), "spoke-1"); err == nil {
+		t.Fatal("checkClusterScope allowed a cluster the inventory can't confirm, want an error — can't prove it's in scope")
+	}
+}
+
+func TestScanCluster_DeniedOutsideAgentScope(t *testing.T) {
+	s := newTestServer(t, policy.GroupMapping{"infra-prod-admins": policy.TierProdAdmin})
+	s.CallerGroups = []string{"infra-prod-admins"}
+	s.Inventory = inventory.New([]inventory.ClusterInfo{
+		{ClusterID: "spoke-1", AWSAccountID: "999999999999", Region: "us-east-1"},
+	})
+	s.AgentScope = scopeAllowing(t, "123456789012")
+
+	_, _, err := s.scanClusterHandler()(context.Background(), nil, ScanClusterIn{ClusterID: "spoke-1"})
+	if err == nil {
+		t.Fatal("scan_cluster ran against a cluster outside the agent's account scope, want an error")
+	}
+}
+
+func TestListNodes_RegionMismatchRefused(t *testing.T) {
+	s := newTestServer(t, policy.GroupMapping{"infra-prod-admins": policy.TierProdAdmin})
+	s.CallerGroups = []string{"infra-prod-admins"}
+	s.Inventory = inventory.New([]inventory.ClusterInfo{
+		{ClusterID: "spoke-1", AWSAccountID: "000000000000", Region: "us-east-1"},
+	})
+
+	_, _, err := s.listNodesHandler()(context.Background(), nil, ListNodesIn{ClusterID: "spoke-1", Region: "us-west-2"})
+	if err == nil {
+		t.Fatal("list_nodes accepted a region that doesn't match the inventory, want an error instead of a wrong-cluster node list")
 	}
 }
 
