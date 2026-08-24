@@ -1,0 +1,224 @@
+syntax = "proto3";
+
+package k8sts.v1;
+
+option go_package = "github.com/chwiee/k8s-ts-mcp/internal/transport/gen/k8stsv1";
+
+// Signal is the same shape as internal/playbooks.Signal — the trigger a
+// playbook reacts to, sent from hub to agent.
+message Signal {
+  string kind = 1;
+  string namespace = 2;
+  string name = 3;
+  string node_name = 4;
+}
+
+// Hello is the first message an agent sends after connecting, identifying
+// which cluster it speaks for. The hub's agent registry is keyed by
+// cluster_id.
+message Hello {
+  string cluster_id = 1;
+  string agent_version = 2;
+}
+
+// DiagnoseRequest asks the agent to identify and explain a signal, without
+// running any remediation.
+message DiagnoseRequest {
+  string request_id = 1;
+  Signal signal = 2;
+  // cluster_id is only set when this request travels over InternalService
+  // (hub-server replica-to-replica forwarding) — the AgentService stream is
+  // already scoped to one cluster, so it's left empty there.
+  string cluster_id = 3;
+}
+
+// ProposedAction describes one rung of a playbook's escalation ladder
+// without running it — enough for the hub's policy engine to decide
+// dry-run vs. execute, and enough to show the caller what would happen.
+message ProposedAction {
+  string name = 1;
+  string description = 2;
+  string risk = 3; // "safe" | "medium" | "high", matches internal/policy.RiskLevel
+}
+
+message DiagnoseResponse {
+  string request_id = 1;
+  string playbook_id = 2;
+  string summary = 3;
+  repeated ProposedAction proposed_actions = 4;
+  string error = 5;
+  // no_playbook is true when no compiled playbook matched the signal at
+  // all (playbook_id/summary/proposed_actions are empty and error is
+  // unset) — a normal outcome, not a failure: the hub falls back to
+  // internal/runbooks (static, human-authored guidance) for this case,
+  // see docs/ARCHITECTURE.md "Runbooks".
+  bool no_playbook = 6;
+  // meta carries playbook-specific context resolved during Diagnose (e.g.
+  // the owning Deployment name) forward to the hub, so a later
+  // ApproveActionRequest can pass it back to the agent — needed when the
+  // ladder's earlier actions (e.g. "restart pod") are expected to have
+  // already changed the target pod's identity by approval time, so
+  // re-diagnosing by the original signal's pod name would fail. See
+  // internal/playbooks.Recheckable.
+  map<string, string> meta = 7;
+}
+
+// PodIssue is one problem found by a Scan — enough to describe it and, if
+// kind matches a registered playbook, to call Diagnose/Execute on it next.
+message PodIssue {
+  string namespace = 1;
+  string name = 2;
+  // kind matches Signal.kind — e.g. "PodCrashLoopBackOff", "PodOOMKilled",
+  // "PodImagePullBackOff" — or "PodUnknownError" when the agent noticed the
+  // pod isn't healthy but didn't recognize the specific failure shape. No
+  // playbook handles "PodUnknownError" — it's reported so a human can look,
+  // not so the caller tries to remediate it blind.
+  string kind = 3;
+  string detail = 4;
+}
+
+// ScanRequest asks the agent what's currently unhealthy in the cluster,
+// without needing to already know a specific pod's name — the discovery
+// step before Diagnose/Execute.
+message ScanRequest {
+  string request_id = 1;
+  string namespace = 2; // empty = every namespace
+  // cluster_id: see DiagnoseRequest.cluster_id.
+  string cluster_id = 3;
+}
+
+message ScanResponse {
+  string request_id = 1;
+  repeated PodIssue issues = 2;
+  string error = 3;
+}
+
+// ExecuteRequest asks the agent to run a playbook's escalation ladder for
+// real. The hub only sends this after its policy engine already decided
+// dry_run == false for the request.
+message ExecuteRequest {
+  string request_id = 1;
+  string playbook_id = 2;
+  Signal signal = 3;
+  // cluster_id: see DiagnoseRequest.cluster_id.
+  string cluster_id = 4;
+}
+
+message Attempt {
+  string action = 1;
+  string risk = 2;
+  string output = 3;
+  string error = 4;
+  bool validated = 5;
+  bool rolled_back = 6;
+  string description = 7;
+  // skipped is true when this action was never run because its risk is
+  // "high" — see internal/execengine.Run.
+  bool skipped = 8;
+}
+
+message ExecuteResponse {
+  string request_id = 1;
+  bool resolved = 2;
+  repeated Attempt attempts = 3;
+  string error = 4;
+}
+
+// ApproveActionRequest asks the agent to run exactly one specific action
+// from a playbook's ladder — the only path by which a policy.RiskHigh
+// action ever actually runs (internal/execengine.Run refuses to auto-run
+// those; this bypasses that specific refusal, on purpose, because it's an
+// explicit human approval of one named action, not an automatic escalation
+// ladder). The hub only sends this after re-validating that action_name was
+// really a proposed/skipped action on a real past incident, from someone
+// authorized to approve — see internal/mcptools's approve_action tool.
+message ApproveActionRequest {
+  string request_id = 1;
+  string playbook_id = 2;
+  Signal signal = 3;
+  string action_name = 4;
+  // cluster_id: see DiagnoseRequest.cluster_id.
+  string cluster_id = 5;
+  // meta is DiagnoseResponse.meta from the original diagnosis that produced
+  // this incident — see internal/playbooks.Recheckable for why the agent
+  // needs this instead of just re-diagnosing signal's pod, which by
+  // approval time is expected to already be gone for playbooks whose ladder
+  // starts with a pod-mutating safe action.
+  map<string, string> meta = 6;
+}
+
+message ApproveActionResponse {
+  string request_id = 1;
+  Attempt attempt = 2;
+  string error = 3;
+}
+
+// GetLogsRequest asks the agent for one component's recent log output — the
+// signal's own pod by default, or a fixed shared component (e.g. the KEDA
+// operator) when deployment is set. Used by internal/runbooks' log_source/
+// log_signatures fields (see internal/mcptools's runbookFallback), letting
+// an SRE teach a runbook entry to confirm itself against real log text
+// without any Go code change.
+message GetLogsRequest {
+  string request_id = 1;
+  string namespace = 2;
+  // name is the pod to read directly — ignored if deployment is set.
+  string name = 3;
+  // deployment, when set, resolves to that Deployment's current pod
+  // instead of trusting name directly, since a Deployment's pod names are
+  // generated (see internal/k8sclient.PodForDeployment).
+  string deployment = 4;
+  int64 tail_lines = 5;
+  // cluster_id: see DiagnoseRequest.cluster_id.
+  string cluster_id = 6;
+}
+
+message GetLogsResponse {
+  string request_id = 1;
+  string logs = 2;
+  string error = 3;
+}
+
+// AgentMessage is anything the agent sends up the stream to the hub.
+message AgentMessage {
+  oneof payload {
+    Hello hello = 1;
+    DiagnoseResponse diagnose_response = 2;
+    ExecuteResponse execute_response = 3;
+    ScanResponse scan_response = 4;
+    ApproveActionResponse approve_action_response = 5;
+    GetLogsResponse get_logs_response = 6;
+  }
+}
+
+// HubMessage is anything the hub sends down the stream to the agent.
+message HubMessage {
+  oneof payload {
+    DiagnoseRequest diagnose_request = 1;
+    ExecuteRequest execute_request = 2;
+    ScanRequest scan_request = 3;
+    ApproveActionRequest approve_action_request = 4;
+    GetLogsRequest get_logs_request = 5;
+  }
+}
+
+// AgentService is the one long-lived, agent-initiated, mTLS connection
+// between a cluster-agent and the hub. The agent always dials the hub — the
+// hub never opens an inbound connection to a cluster.
+service AgentService {
+  rpc Session(stream AgentMessage) returns (stream HubMessage);
+}
+
+// InternalService is hub-server replica <-> hub-server replica only, never
+// called by an agent or an MCP client. A cluster's agent connection lives
+// on exactly one replica; when a different replica receives a request for
+// that cluster (see internal/registry for how it finds out which one), it
+// forwards the request here instead of failing — this is what makes
+// running hub-server as more than one replica actually work.
+service InternalService {
+  rpc Diagnose(DiagnoseRequest) returns (DiagnoseResponse);
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+  rpc Scan(ScanRequest) returns (ScanResponse);
+  rpc ApproveAction(ApproveActionRequest) returns (ApproveActionResponse);
+  rpc GetLogs(GetLogsRequest) returns (GetLogsResponse);
+}

@@ -24,3 +24,9 @@ go.work.sum
 # IDE
 .vscode/
 .idea/
+
+# Local dev/test artifacts
+.kind-*.kubeconfig
+*.jsonl
+.scratch-*
+*.log
