@@ -1,0 +1,9 @@
+# Mapeamento grupo AD/OIDC -> tier de acesso, usado pelo policy engine do
+# hub-server (internal/policy). Isto é dado operacional, não lógica de
+# política — a lógica (o que cada tier pode fazer) vive em
+# internal/policy/policy.rego. Copie este arquivo, ajuste os nomes de grupo
+# reais e aponte --group-mapping/GROUP_MAPPING_PATH pra ele.
+groups:
+  infra-prod-admins: prod-admin
+  infra-eng: nonprod-admin
+  time-x-readonly: readonly

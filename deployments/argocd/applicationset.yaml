@@ -1,0 +1,36 @@
+# Delivers cluster-agent to every cluster in the fleet, in canary waves,
+# using ArgoCD's cluster generator (the same cluster list ArgoCD already
+# manages — no separate cluster inventory for k8s-ts-mcp). Playbook bundles
+# published to ECR are delivered the same way: reference their OCI artifact
+# tag from this same templated values, so a playbook change rides the same
+# reviewed, wave-by-wave rollout as an agent binary change.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: k8s-ts-mcp-cluster-agent
+  namespace: argocd
+spec:
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            k8s-ts-mcp/wave: canary # promova pra "ring1", depois sem label (todos), depois que a onda anterior validar
+  template:
+    metadata:
+      name: "k8s-ts-mcp-cluster-agent-{{name}}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/chwiee/k8s-ts-mcp.git
+        targetRevision: main
+        path: deployments/cluster-agent
+        kustomize:
+          images:
+            - "${IMAGE}=<conta>.dkr.ecr.<região>.amazonaws.com/k8s-ts-mcp/cluster-agent:<tag>"
+      destination:
+        server: "{{server}}"
+      syncPolicy:
+        automated:
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

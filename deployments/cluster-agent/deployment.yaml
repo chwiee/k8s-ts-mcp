@@ -1,0 +1,86 @@
+# Runs one cluster-agent per cluster. Templated per-cluster by the ArgoCD
+# ApplicationSet (see deployments/argocd/applicationset.yaml) — ${CLUSTER_ID}
+# and ${IMAGE} are filled in from the cluster generator, not literal here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k8s-ts-mcp
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-agent
+  namespace: k8s-ts-mcp
+---
+# Minimal RBAC for the playbooks built into this repo (core/crashloopbackoff,
+# calico/node-degraded, keda/scaledobject-stuck). A cluster that enables
+# additional playbooks needs their rules added here too — see each
+# playbook's use of internal/k8sclient for exactly which verbs it needs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-agent
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "update"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "daemonsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["delete"]
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-agent
+subjects:
+  - kind: ServiceAccount
+    name: cluster-agent
+    namespace: k8s-ts-mcp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-agent
+  namespace: k8s-ts-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: cluster-agent}
+  template:
+    metadata:
+      labels: {app: cluster-agent}
+    spec:
+      serviceAccountName: cluster-agent
+      containers:
+        - name: cluster-agent
+          image: "${IMAGE}" # publicado no ECR, tag gerenciada pelo ArgoCD
+          args:
+            - --cluster-id=${CLUSTER_ID}
+            - --hub-addr=k8s-ts-mcp-hub.hub-cluster.internal:7443
+            - --cert=/etc/k8s-ts-mcp/tls/tls.crt
+            - --key=/etc/k8s-ts-mcp/tls/tls.key
+            - --ca=/etc/k8s-ts-mcp/tls/ca.crt
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/k8s-ts-mcp/tls
+              readOnly: true
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 256Mi}
+      volumes:
+        - name: tls
+          secret:
+            secretName: cluster-agent-tls # certificado mTLS deste cluster, provisionado fora deste manifest

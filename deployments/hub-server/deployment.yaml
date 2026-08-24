@@ -1,0 +1,96 @@
+# Runs in the central ("hub") cluster only — one deployment for the whole
+# fleet, not templated per cluster. Designed to run as N replicas: the
+# shared Redis registry (internal/registry) plus replica-to-replica
+# forwarding (InternalService) is what makes that safe — see
+# docs/ARCHITECTURE.md "Registro compartilhado entre réplicas" for why.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: k8s-ts-mcp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-server
+  namespace: k8s-ts-mcp
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: hub-server}
+  template:
+    metadata:
+      labels: {app: hub-server}
+    spec:
+      containers:
+        - name: hub-server
+          image: "${IMAGE}" # publicado no ECR
+          env:
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+          args:
+            - --grpc-addr=:7443
+            - --http-addr=:8443
+            - --cert=/etc/k8s-ts-mcp/tls/tls.crt
+            - --key=/etc/k8s-ts-mcp/tls/tls.key
+            - --ca=/etc/k8s-ts-mcp/tls/ca.crt
+            - --group-mapping=/etc/k8s-ts-mcp/group-mapping.yaml
+            - --audit-path=/var/lib/k8s-ts-mcp/audit.jsonl
+            - --redis-addr=${REDIS_ADDR} # ElastiCache — obrigatório com >1 réplica, ver docs/ARCHITECTURE.md
+            - --self-addr=$(POD_IP):7443
+          ports:
+            - {name: grpc, containerPort: 7443}
+            - {name: mcp-http, containerPort: 8443}
+          volumeMounts:
+            - {name: tls, mountPath: /etc/k8s-ts-mcp/tls, readOnly: true}
+            - {name: group-mapping, mountPath: /etc/k8s-ts-mcp/group-mapping.yaml, subPath: group-mapping.yaml, readOnly: true}
+            - {name: audit, mountPath: /var/lib/k8s-ts-mcp}
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+      volumes:
+        - name: tls
+          secret: {secretName: hub-server-tls}
+        - name: group-mapping
+          configMap: {name: hub-server-group-mapping} # ver group-mapping.example.yaml
+        - name: audit
+          persistentVolumeClaim: {claimName: hub-server-audit} # trocar por Postgres antes de produção real, ver docs/ARCHITECTURE.md
+---
+# NetworkPolicy restringindo :7443 (gRPC — usado tanto por agentes quanto
+# pelo forwarding réplica-a-réplica de InternalService) a só receber tráfego
+# de dentro do próprio namespace, já que agentes e réplicas-pares são as
+# únicas origens legítimas.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hub-server-grpc-internal-only
+  namespace: k8s-ts-mcp
+spec:
+  podSelector: {matchLabels: {app: hub-server}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {}}]
+      ports: [{protocol: TCP, port: 7443}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-server-grpc
+  namespace: k8s-ts-mcp
+spec:
+  selector: {app: hub-server}
+  ports:
+    - {name: grpc, port: 7443, targetPort: grpc}
+---
+# Exposta via Ingress/ALB, não diretamente — o Ingress real precisa de
+# sticky session (cookie), não sessionAffinity: ClientIP: muitos usuários
+# atrás do mesmo NAT corporativo compartilham IP de origem, e ClientIP
+# concentraria todos numa réplica só. Ver docs/ARCHITECTURE.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: hub-server-mcp
+  namespace: k8s-ts-mcp
+spec:
+  selector: {app: hub-server}
+  ports:
+    - {name: mcp-http, port: 8443, targetPort: mcp-http}
