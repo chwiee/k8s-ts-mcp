@@ -66,6 +66,11 @@ type Server struct {
 	// require one — permissive by design, same as every other optional
 	// config in this package.
 	AgentScope *agentauth.Scope
+	// ToolAccess restricts which tools a caller's AD groups (CallerGroups)
+	// even see registered for their MCP session — see ToolAccess's doc
+	// comment. Nil means no --tool-access-config configured, every tool
+	// visible to everyone (today's default).
+	ToolAccess ToolAccess
 }
 
 // checkClusterScope resolves clusterID via Inventory (when configured) and
@@ -148,57 +153,67 @@ func maxRisk(actions []*pb.ProposedAction) policy.RiskLevel {
 // exposes a real by-scope listing endpoint; listClustersHandler below is
 // kept working (and tested) for that reintegration, just not wired here.
 func Register(server *mcp.Server, s *Server) {
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "scan_cluster",
-		Description: "Lista os pods com problema num cluster — use isto ANTES de troubleshoot sempre que o usuário " +
-			"não tiver informado o nome exato de um pod (ex: \"valide os pods do spoke-1\", \"tem algo quebrado no " +
-			"spoke-2?\"). Cada resultado já vem com kind pronto para passar direto pra troubleshoot; kind " +
-			"\"PodUnknownError\" significa que o agente notou o pod doente mas não reconheceu o problema — não existe " +
-			"playbook automatizado para esse caso, apenas reporte ao usuário.",
-	}, s.scanClusterHandler())
+	if s.ToolAccess.Allows("scan_cluster", s.CallerGroups) {
+		mcp.AddTool(server, &mcp.Tool{
+			Name: "scan_cluster",
+			Description: "Lista os pods com problema num cluster — use isto ANTES de troubleshoot sempre que o usuário " +
+				"não tiver informado o nome exato de um pod (ex: \"valide os pods do spoke-1\", \"tem algo quebrado no " +
+				"spoke-2?\"). Cada resultado já vem com kind pronto para passar direto pra troubleshoot; kind " +
+				"\"PodUnknownError\" significa que o agente notou o pod doente mas não reconheceu o problema — não existe " +
+				"playbook automatizado para esse caso, apenas reporte ao usuário.",
+		}, s.scanClusterHandler())
+	}
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "troubleshoot",
-		Description: "Diagnostica um sinal num cluster (ex: pod em CrashLoopBackOff, nó com Calico degradado, " +
-			"ScaledObject do KEDA travado) e, se a política de acesso permitir, executa a correção. Sempre pergunte " +
-			"ao usuário o cluster_id se ele não tiver sido informado explicitamente — nunca adivinhe. Se o usuário " +
-			"não souber o nome do pod, use scan_cluster primeiro. Retorna se a ação foi executada de verdade " +
-			"(allowed=true, dry_run=false) ou só os comandos propostos (dry_run=true) — nesse caso, explique ao " +
-			"usuário que ele precisa rodar os comandos manualmente. Se não houver playbook automatizado para o " +
-			"sinal, a resposta vem do catálogo de runbooks (texto de referência) — sempre dry_run=true nesse caso, " +
-			"porque é só conhecimento, nunca uma ação real.",
-	}, s.troubleshootHandler())
+	if s.ToolAccess.Allows("troubleshoot", s.CallerGroups) {
+		mcp.AddTool(server, &mcp.Tool{
+			Name: "troubleshoot",
+			Description: "Diagnostica um sinal num cluster (ex: pod em CrashLoopBackOff, nó com Calico degradado, " +
+				"ScaledObject do KEDA travado) e, se a política de acesso permitir, executa a correção. Sempre pergunte " +
+				"ao usuário o cluster_id se ele não tiver sido informado explicitamente — nunca adivinhe. Se o usuário " +
+				"não souber o nome do pod, use scan_cluster primeiro. Retorna se a ação foi executada de verdade " +
+				"(allowed=true, dry_run=false) ou só os comandos propostos (dry_run=true) — nesse caso, explique ao " +
+				"usuário que ele precisa rodar os comandos manualmente. Se não houver playbook automatizado para o " +
+				"sinal, a resposta vem do catálogo de runbooks (texto de referência) — sempre dry_run=true nesse caso, " +
+				"porque é só conhecimento, nunca uma ação real.",
+		}, s.troubleshootHandler())
+	}
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "approve_action",
-		Description: "Aprova e executa exatamente UMA ação de alto risco que troubleshoot propôs mas não executou " +
-			"automaticamente (risk=\"high\" nos attempts com skipped=true, ou risk=\"high\" nos proposed_commands " +
-			"quando dry_run=true). Use o incident_id retornado por troubleshoot e o action_name exato da ação. Só " +
-			"chamadores com tier prod-admin podem aprovar, e só funciona se este hub estiver com execução ligada — " +
-			"não é um jeito de contornar um hub configurado como só-proposta. O agente do cluster reconfere o " +
-			"estado atual antes de rodar — se o problema já foi resolvido por outro caminho ou o playbook mudou, a " +
-			"aprovação falha em vez de rodar algo que não é mais o que foi proposto. SEMPRE confirme com o usuário " +
-			"antes de chamar esta ferramenta — diferente de troubleshoot em dry-run, isso executa uma mudança real " +
-			"e irreversível no cluster.",
-	}, s.approveActionHandler())
+	if s.ToolAccess.Allows("approve_action", s.CallerGroups) {
+		mcp.AddTool(server, &mcp.Tool{
+			Name: "approve_action",
+			Description: "Aprova e executa exatamente UMA ação de alto risco que troubleshoot propôs mas não executou " +
+				"automaticamente (risk=\"high\" nos attempts com skipped=true, ou risk=\"high\" nos proposed_commands " +
+				"quando dry_run=true). Use o incident_id retornado por troubleshoot e o action_name exato da ação. Só " +
+				"chamadores com tier prod-admin podem aprovar, e só funciona se este hub estiver com execução ligada — " +
+				"não é um jeito de contornar um hub configurado como só-proposta. O agente do cluster reconfere o " +
+				"estado atual antes de rodar — se o problema já foi resolvido por outro caminho ou o playbook mudou, a " +
+				"aprovação falha em vez de rodar algo que não é mais o que foi proposto. SEMPRE confirme com o usuário " +
+				"antes de chamar esta ferramenta — diferente de troubleshoot em dry-run, isso executa uma mudança real " +
+				"e irreversível no cluster.",
+		}, s.approveActionHandler())
+	}
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_postmortem",
-		Description: "Retorna o post-mortem em texto simples de um incidente, pelo incident_id retornado por troubleshoot.",
-	}, s.postmortemHandler())
+	if s.ToolAccess.Allows("get_postmortem", s.CallerGroups) {
+		mcp.AddTool(server, &mcp.Tool{
+			Name:        "get_postmortem",
+			Description: "Retorna o post-mortem em texto simples de um incidente, pelo incident_id retornado por troubleshoot.",
+		}, s.postmortemHandler())
+	}
 
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "list_nodes",
-		Description: "Lista os nodes de um cluster: nome, zona, região, tipo de instância, arquitetura e se está " +
-			"Ready. Todos os clusters da empresa são clusters cloud (EKS) — SEMPRE pergunte ao usuário o cluster_id " +
-			"exato se ele não tiver sido informado explicitamente, mesmo que ele só tenha mencionado uma região ou " +
-			"conta AWS (várias contas/regiões podem ter cluster ativo); nunca adivinhe qual cluster ele quer dizer. " +
-			"Use list_clusters primeiro se não tiver certeza do cluster_id exato. O parâmetro region é opcional e só " +
-			"serve para confirmar contra o inventário de clusters — se o cluster estiver numa região diferente da " +
-			"informada, a tool retorna erro em vez de listar os nodes do cluster errado. A resposta também traz " +
-			"aws_account_id/region/eks_cluster_name do inventário quando conhecidos (inventory_known=false quando o " +
-			"cluster não está cadastrado no inventário — reporte isso ao usuário em vez de inventar a região).",
-	}, s.listNodesHandler())
+	if s.ToolAccess.Allows("list_nodes", s.CallerGroups) {
+		mcp.AddTool(server, &mcp.Tool{
+			Name: "list_nodes",
+			Description: "Lista os nodes de um cluster: nome, zona, região, tipo de instância, arquitetura e se está " +
+				"Ready. Todos os clusters da empresa são clusters cloud (EKS) — SEMPRE pergunte ao usuário o cluster_id " +
+				"exato se ele não tiver sido informado explicitamente, mesmo que ele só tenha mencionado uma região ou " +
+				"conta AWS (várias contas/regiões podem ter cluster ativo); nunca adivinhe qual cluster ele quer dizer. " +
+				"Use list_clusters primeiro se não tiver certeza do cluster_id exato. O parâmetro region é opcional e só " +
+				"serve para confirmar contra o inventário de clusters — se o cluster estiver numa região diferente da " +
+				"informada, a tool retorna erro em vez de listar os nodes do cluster errado. A resposta também traz " +
+				"aws_account_id/region/eks_cluster_name do inventário quando conhecidos (inventory_known=false quando o " +
+				"cluster não está cadastrado no inventário — reporte isso ao usuário em vez de inventar a região).",
+		}, s.listNodesHandler())
+	}
 }
 
 type ListClustersOut struct {

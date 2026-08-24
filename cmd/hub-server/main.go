@@ -57,6 +57,7 @@ func main() {
 	clusterInventoryPath := flag.String("cluster-inventory-path", envOr("CLUSTER_INVENTORY_PATH", ""), "caminho do YAML de inventário de clusters pra uso local/dev (cluster_id -> aws_account_id/region/eks_cluster_name, ver internal/inventory) — ignorado se --inventory-api-url for informado")
 	inventoryAPIURL := flag.String("inventory-api-url", envOr("INVENTORY_API_URL", ""), "URL base da API de inventário de clusters da empresa (ver internal/inventory.HTTPClient) — tem prioridade sobre --cluster-inventory-path quando os dois são informados")
 	agentScopesConfigPath := flag.String("agent-scopes-config", envOr("AGENT_SCOPES_CONFIG_PATH", ""), "caminho do YAML de token->contas AWS permitidas por agente chamador (ver internal/agentauth) — vazio desliga a checagem de escopo de conta (modo dev/local)")
+	toolAccessConfigPath := flag.String("tool-access-config", envOr("TOOL_ACCESS_CONFIG_PATH", ""), "caminho do YAML de tool->substring de nome de grupo AD exigida (ver internal/mcptools.ToolAccess) — vazio deixa toda tool visível pra qualquer chamador")
 	flag.Parse()
 
 	groups, err := loadGroupMapping(*groupMappingPath)
@@ -159,6 +160,22 @@ func main() {
 		log.Printf("hub-server: nenhum --agent-scopes-config informado — sem checagem de escopo de conta por chamador (modo dev/local)")
 	}
 
+	var toolAccess mcptools.ToolAccess
+	if *toolAccessConfigPath != "" {
+		f, err := os.Open(*toolAccessConfigPath)
+		if err != nil {
+			log.Fatalf("hub-server: abrindo --tool-access-config: %v", err)
+		}
+		toolAccess, err = mcptools.LoadToolAccess(f)
+		f.Close()
+		if err != nil {
+			log.Fatalf("hub-server: lendo --tool-access-config: %v", err)
+		}
+		log.Printf("hub-server: %d regra(s) de visibilidade de tool carregadas de %s", len(toolAccess), *toolAccessConfigPath)
+	} else {
+		log.Printf("hub-server: nenhum --tool-access-config informado — toda tool visível pra qualquer chamador")
+	}
+
 	var runbooksStore *runbooks.Store
 	if *runbooksPath != "" {
 		runbooksStore, err = runbooks.NewStore(*runbooksPath)
@@ -182,6 +199,7 @@ func main() {
 		CallerGroups:  splitCSV(*testCallerGroupsCSV),
 		Runbooks:      runbooksStore,
 		Inventory:     clusterInventory,
+		ToolAccess:    toolAccess,
 	}
 
 	mcpInstructions := "Ferramentas de troubleshooting preditivo de Kubernetes para a frota de clusters da empresa. " +
