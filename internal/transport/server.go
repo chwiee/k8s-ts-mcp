@@ -144,6 +144,8 @@ func (c *agentConn) dispatch(msg *pb.AgentMessage) {
 		requestID = p.ApproveActionResponse.GetRequestId()
 	case *pb.AgentMessage_GetLogsResponse:
 		requestID = p.GetLogsResponse.GetRequestId()
+	case *pb.AgentMessage_ListNodesResponse:
+		requestID = p.ListNodesResponse.GetRequestId()
 	default:
 		return
 	}
@@ -418,6 +420,26 @@ func (s *Server) ApproveAction(ctx context.Context, clusterID, playbookID string
 	return peer.ApproveAction(ctx, &pb.ApproveActionRequest{RequestId: newRequestID(), PlaybookId: playbookID, Signal: sig, ActionName: actionName, ClusterId: clusterID, Meta: meta})
 }
 
+// ListNodes asks the given cluster's agent for every node it has, blocking
+// until it replies or ctx is done — forwarded to another replica the same
+// way as Diagnose/Execute/Scan when needed.
+func (s *Server) ListNodes(ctx context.Context, clusterID string) (*pb.ListNodesResponse, error) {
+	if h, found, err := s.tryRole(ctx, clusterID); found {
+		if err != nil {
+			return nil, err
+		}
+		return listNodesResponse(ctx, h), nil
+	}
+	if conn, ok := s.get(clusterID); ok {
+		return s.listNodesLocal(ctx, conn)
+	}
+	peer, err := s.peerFor(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	return peer.ListNodes(ctx, &pb.ListNodesRequest{RequestId: newRequestID(), ClusterId: clusterID})
+}
+
 func (s *Server) diagnoseLocal(ctx context.Context, conn *agentConn, sig *pb.Signal) (*pb.DiagnoseResponse, error) {
 	reqID := newRequestID()
 	ch := conn.await(reqID)
@@ -533,6 +555,29 @@ func (s *Server) getLogsLocal(ctx context.Context, conn *agentConn, namespace, n
 	}
 }
 
+func (s *Server) listNodesLocal(ctx context.Context, conn *agentConn) (*pb.ListNodesResponse, error) {
+	reqID := newRequestID()
+	ch := conn.await(reqID)
+	defer conn.forget(reqID)
+
+	if err := conn.send(&pb.HubMessage{Payload: &pb.HubMessage_ListNodesRequest{
+		ListNodesRequest: &pb.ListNodesRequest{RequestId: reqID},
+	}}); err != nil {
+		return nil, fmt.Errorf("sending list_nodes request to %s: %w", conn.clusterID, err)
+	}
+
+	select {
+	case msg := <-ch:
+		resp := msg.GetListNodesResponse()
+		if resp == nil {
+			return nil, fmt.Errorf("cluster %s sent an unexpected reply to a list_nodes request", conn.clusterID)
+		}
+		return resp, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // peerFor resolves clusterID to another replica via Registry and returns a
 // client for that replica's InternalService. Returns ErrClusterNotConnected
 // if Registry doesn't know about clusterID either.
@@ -632,6 +677,14 @@ func (h *internalServiceServer) GetLogs(ctx context.Context, req *pb.GetLogsRequ
 		return nil, ErrClusterNotConnected(req.ClusterId)
 	}
 	return h.s.getLogsLocal(ctx, conn, req.Namespace, req.Name, req.Deployment, req.TailLines)
+}
+
+func (h *internalServiceServer) ListNodes(ctx context.Context, req *pb.ListNodesRequest) (*pb.ListNodesResponse, error) {
+	conn, ok := h.s.get(req.ClusterId)
+	if !ok {
+		return nil, ErrClusterNotConnected(req.ClusterId)
+	}
+	return h.s.listNodesLocal(ctx, conn)
 }
 
 func newRequestID() string {

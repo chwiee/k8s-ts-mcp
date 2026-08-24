@@ -223,3 +223,23 @@ func (h *Handler) GetLogs(ctx context.Context, namespace, name, deployment strin
 	}
 	return redact.Text(logs), nil
 }
+
+// ListNodes implements transport.Handler.
+func (h *Handler) ListNodes(ctx context.Context) ([]*pb.NodeInfo, error) {
+	nodes, err := h.Client.ListNodes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listando nodes: %w", err)
+	}
+	out := make([]*pb.NodeInfo, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, &pb.NodeInfo{
+			Name:         n.Name,
+			Zone:         n.Zone,
+			Region:       n.Region,
+			InstanceType: n.InstanceType,
+			Architecture: n.Architecture,
+			Ready:        n.Ready,
+		})
+	}
+	return out, nil
+}

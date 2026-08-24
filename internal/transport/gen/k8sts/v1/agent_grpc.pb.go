@@ -128,6 +128,7 @@ const (
 	InternalService_Scan_FullMethodName          = "/k8sts.v1.InternalService/Scan"
 	InternalService_ApproveAction_FullMethodName = "/k8sts.v1.InternalService/ApproveAction"
 	InternalService_GetLogs_FullMethodName       = "/k8sts.v1.InternalService/GetLogs"
+	InternalService_ListNodes_FullMethodName     = "/k8sts.v1.InternalService/ListNodes"
 )
 
 // InternalServiceClient is the client API for InternalService service.
@@ -146,6 +147,7 @@ type InternalServiceClient interface {
 	Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (*ScanResponse, error)
 	ApproveAction(ctx context.Context, in *ApproveActionRequest, opts ...grpc.CallOption) (*ApproveActionResponse, error)
 	GetLogs(ctx context.Context, in *GetLogsRequest, opts ...grpc.CallOption) (*GetLogsResponse, error)
+	ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
 }
 
 type internalServiceClient struct {
@@ -206,6 +208,16 @@ func (c *internalServiceClient) GetLogs(ctx context.Context, in *GetLogsRequest,
 	return out, nil
 }
 
+func (c *internalServiceClient) ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNodesResponse)
+	err := c.cc.Invoke(ctx, InternalService_ListNodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InternalServiceServer is the server API for InternalService service.
 // All implementations must embed UnimplementedInternalServiceServer
 // for forward compatibility.
@@ -222,6 +234,7 @@ type InternalServiceServer interface {
 	Scan(context.Context, *ScanRequest) (*ScanResponse, error)
 	ApproveAction(context.Context, *ApproveActionRequest) (*ApproveActionResponse, error)
 	GetLogs(context.Context, *GetLogsRequest) (*GetLogsResponse, error)
+	ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error)
 	mustEmbedUnimplementedInternalServiceServer()
 }
 
@@ -246,6 +259,9 @@ func (UnimplementedInternalServiceServer) ApproveAction(context.Context, *Approv
 }
 func (UnimplementedInternalServiceServer) GetLogs(context.Context, *GetLogsRequest) (*GetLogsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetLogs not implemented")
+}
+func (UnimplementedInternalServiceServer) ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNodes not implemented")
 }
 func (UnimplementedInternalServiceServer) mustEmbedUnimplementedInternalServiceServer() {}
 func (UnimplementedInternalServiceServer) testEmbeddedByValue()                         {}
@@ -358,6 +374,24 @@ func _InternalService_GetLogs_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_ListNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListNodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ListNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ListNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ListNodes(ctx, req.(*ListNodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InternalService_ServiceDesc is the grpc.ServiceDesc for InternalService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -384,6 +418,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetLogs",
 			Handler:    _InternalService_GetLogs_Handler,
+		},
+		{
+			MethodName: "ListNodes",
+			Handler:    _InternalService_ListNodes_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -43,6 +43,10 @@ func (fakeHandler) ApproveAction(_ context.Context, _ string, sig *pb.Signal, ac
 	return &pb.Attempt{Action: actionName, Output: "increased memory limit for " + sig.GetName(), Validated: true}, nil
 }
 
+func (fakeHandler) ListNodes(_ context.Context) ([]*pb.NodeInfo, error) {
+	return []*pb.NodeInfo{{Name: "spoke-1-control-plane", Zone: "us-east-1a", Region: "us-east-1", InstanceType: "t3.medium", Architecture: "amd64", Ready: true}}, nil
+}
+
 // newTestPair starts an in-memory (bufconn) hub Server and connects one
 // Client to it as cluster "spoke-1", returning the Server and a cancel func.
 // It blocks until the agent has registered.
@@ -110,6 +114,25 @@ func TestExecute_RoundTrip(t *testing.T) {
 	}
 	if len(resp.Attempts) != 1 || resp.Attempts[0].Action != "restart pod" {
 		t.Errorf("Attempts = %v, want one 'restart pod' attempt", resp.Attempts)
+	}
+}
+
+func TestListNodes_RoundTrip(t *testing.T) {
+	hub, cancel := newTestPair(t)
+	defer cancel()
+
+	ctx, done := context.WithTimeout(context.Background(), 5*time.Second)
+	defer done()
+
+	resp, err := hub.ListNodes(ctx, "spoke-1")
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+	if len(resp.Nodes) != 1 || resp.Nodes[0].Name != "spoke-1-control-plane" {
+		t.Errorf("Nodes = %v, want one node named spoke-1-control-plane", resp.Nodes)
+	}
+	if resp.Nodes[0].Region != "us-east-1" {
+		t.Errorf("Nodes[0].Region = %q, want us-east-1", resp.Nodes[0].Region)
 	}
 }
 

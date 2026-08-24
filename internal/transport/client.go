@@ -37,6 +37,8 @@ type Handler interface {
 	// current pod under deployment when deployment is non-empty (name is
 	// ignored in that case) — see internal/runbooks' log_source field.
 	GetLogs(ctx context.Context, namespace, name, deployment string, tailLines int64) (logs string, err error)
+	// ListNodes returns every node in the cluster.
+	ListNodes(ctx context.Context) (nodes []*pb.NodeInfo, err error)
 }
 
 // Client is the agent side: dials the hub, announces its cluster_id, and
@@ -137,6 +139,8 @@ func (c *Client) runOnce(ctx context.Context) error {
 			go c.handleApproveAction(ctx, send, p.ApproveActionRequest)
 		case *pb.HubMessage_GetLogsRequest:
 			go c.handleGetLogs(ctx, send, p.GetLogsRequest)
+		case *pb.HubMessage_ListNodesRequest:
+			go c.handleListNodes(ctx, send, p.ListNodesRequest)
 		}
 	}
 }
@@ -178,5 +182,13 @@ func (c *Client) handleGetLogs(ctx context.Context, send func(*pb.AgentMessage) 
 	resp.RequestId = req.RequestId
 	if err := send(&pb.AgentMessage{Payload: &pb.AgentMessage_GetLogsResponse{GetLogsResponse: resp}}); err != nil {
 		log.Printf("transport: falha ao enviar get_logs response %s: %v", req.RequestId, err)
+	}
+}
+
+func (c *Client) handleListNodes(ctx context.Context, send func(*pb.AgentMessage) error, req *pb.ListNodesRequest) {
+	resp := listNodesResponse(ctx, c.handler)
+	resp.RequestId = req.RequestId
+	if err := send(&pb.AgentMessage{Payload: &pb.AgentMessage_ListNodesResponse{ListNodesResponse: resp}}); err != nil {
+		log.Printf("transport: falha ao enviar list_nodes response %s: %v", req.RequestId, err)
 	}
 }

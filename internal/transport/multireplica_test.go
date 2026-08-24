@@ -125,6 +125,32 @@ func TestServer_ForwardsExecuteToPeerReplica(t *testing.T) {
 	}
 }
 
+func TestServer_ForwardsListNodesToPeerReplica(t *testing.T) {
+	reg := registry.NewInMemory()
+	newReplica(t, reg, "replica-a", dialByReplicaAddr)
+	hubB := newReplica(t, reg, "replica-b", dialByReplicaAddr)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	client := NewClient("passthrough:///replica-a", "spoke-1", "test", insecure.NewCredentials(), fakeHandler{},
+		grpc.WithContextDialer(dialByReplicaAddr))
+	go func() { _ = client.Run(ctx) }()
+
+	waitForRegistryEntry(t, reg, "spoke-1")
+
+	// replica B has no local connection for spoke-1 — this must forward to
+	// replica A over InternalService, proving list_nodes got the same
+	// multi-replica treatment as Diagnose/Execute/Scan/GetLogs, not a
+	// one-off that only works on the replica actually holding the agent.
+	resp, err := hubB.ListNodes(context.Background(), "spoke-1")
+	if err != nil {
+		t.Fatalf("ListNodes via peer replica: %v", err)
+	}
+	if len(resp.Nodes) != 1 || resp.Nodes[0].Name != "spoke-1-control-plane" {
+		t.Errorf("Nodes = %v, want one node named spoke-1-control-plane", resp.Nodes)
+	}
+}
+
 func TestServer_ConnectedClusters_FleetWideAcrossReplicas(t *testing.T) {
 	reg := registry.NewInMemory()
 	newReplica(t, reg, "replica-a", dialByReplicaAddr)

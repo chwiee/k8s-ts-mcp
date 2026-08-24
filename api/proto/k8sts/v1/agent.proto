@@ -179,6 +179,35 @@ message GetLogsResponse {
   string error = 3;
 }
 
+// NodeInfo describes one Kubernetes node — enough to answer fleet/placement
+// questions (e.g. "which nodes are in us-east-1?") without a raw kubectl.
+// zone/region come from the node's topology labels, which a real cloud
+// controller manager (EKS) always sets; a bare local cluster without one
+// (e.g. a Floci/kind stand-in with no cloud-controller-manager) may leave
+// them empty — callers needing an authoritative region for a whole cluster
+// should prefer internal/inventory over these per-node labels.
+message NodeInfo {
+  string name = 1;
+  string zone = 2;
+  string region = 3;
+  string instance_type = 4;
+  string architecture = 5;
+  bool ready = 6;
+}
+
+// ListNodesRequest asks the agent for every node in its cluster.
+message ListNodesRequest {
+  string request_id = 1;
+  // cluster_id: see DiagnoseRequest.cluster_id.
+  string cluster_id = 2;
+}
+
+message ListNodesResponse {
+  string request_id = 1;
+  repeated NodeInfo nodes = 2;
+  string error = 3;
+}
+
 // AgentMessage is anything the agent sends up the stream to the hub.
 message AgentMessage {
   oneof payload {
@@ -188,6 +217,7 @@ message AgentMessage {
     ScanResponse scan_response = 4;
     ApproveActionResponse approve_action_response = 5;
     GetLogsResponse get_logs_response = 6;
+    ListNodesResponse list_nodes_response = 7;
   }
 }
 
@@ -199,6 +229,7 @@ message HubMessage {
     ScanRequest scan_request = 3;
     ApproveActionRequest approve_action_request = 4;
     GetLogsRequest get_logs_request = 5;
+    ListNodesRequest list_nodes_request = 6;
   }
 }
 
@@ -221,4 +252,5 @@ service InternalService {
   rpc Scan(ScanRequest) returns (ScanResponse);
   rpc ApproveAction(ApproveActionRequest) returns (ApproveActionResponse);
   rpc GetLogs(GetLogsRequest) returns (GetLogsResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
 }

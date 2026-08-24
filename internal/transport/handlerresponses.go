@@ -57,3 +57,12 @@ func getLogsResponse(ctx context.Context, h Handler, namespace, name, deployment
 	}
 	return resp
 }
+
+func listNodesResponse(ctx context.Context, h Handler) *pb.ListNodesResponse {
+	nodes, err := h.ListNodes(ctx)
+	resp := &pb.ListNodesResponse{Nodes: nodes}
+	if err != nil {
+		resp.Error = err.Error()
+	}
+	return resp
+}

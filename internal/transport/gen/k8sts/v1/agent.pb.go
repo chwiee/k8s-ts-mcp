@@ -1132,6 +1132,211 @@ func (x *GetLogsResponse) GetError() string {
 	return ""
 }
 
+// NodeInfo describes one Kubernetes node — enough to answer fleet/placement
+// questions (e.g. "which nodes are in us-east-1?") without a raw kubectl.
+// zone/region come from the node's topology labels, which a real cloud
+// controller manager (EKS) always sets; a bare local cluster without one
+// (e.g. a Floci/kind stand-in with no cloud-controller-manager) may leave
+// them empty — callers needing an authoritative region for a whole cluster
+// should prefer internal/inventory over these per-node labels.
+type NodeInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Zone          string                 `protobuf:"bytes,2,opt,name=zone,proto3" json:"zone,omitempty"`
+	Region        string                 `protobuf:"bytes,3,opt,name=region,proto3" json:"region,omitempty"`
+	InstanceType  string                 `protobuf:"bytes,4,opt,name=instance_type,json=instanceType,proto3" json:"instance_type,omitempty"`
+	Architecture  string                 `protobuf:"bytes,5,opt,name=architecture,proto3" json:"architecture,omitempty"`
+	Ready         bool                   `protobuf:"varint,6,opt,name=ready,proto3" json:"ready,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodeInfo) Reset() {
+	*x = NodeInfo{}
+	mi := &file_k8sts_v1_agent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeInfo) ProtoMessage() {}
+
+func (x *NodeInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_k8sts_v1_agent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeInfo.ProtoReflect.Descriptor instead.
+func (*NodeInfo) Descriptor() ([]byte, []int) {
+	return file_k8sts_v1_agent_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *NodeInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *NodeInfo) GetZone() string {
+	if x != nil {
+		return x.Zone
+	}
+	return ""
+}
+
+func (x *NodeInfo) GetRegion() string {
+	if x != nil {
+		return x.Region
+	}
+	return ""
+}
+
+func (x *NodeInfo) GetInstanceType() string {
+	if x != nil {
+		return x.InstanceType
+	}
+	return ""
+}
+
+func (x *NodeInfo) GetArchitecture() string {
+	if x != nil {
+		return x.Architecture
+	}
+	return ""
+}
+
+func (x *NodeInfo) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
+// ListNodesRequest asks the agent for every node in its cluster.
+type ListNodesRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	RequestId string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// cluster_id: see DiagnoseRequest.cluster_id.
+	ClusterId     string `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNodesRequest) Reset() {
+	*x = ListNodesRequest{}
+	mi := &file_k8sts_v1_agent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNodesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNodesRequest) ProtoMessage() {}
+
+func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_k8sts_v1_agent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNodesRequest.ProtoReflect.Descriptor instead.
+func (*ListNodesRequest) Descriptor() ([]byte, []int) {
+	return file_k8sts_v1_agent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ListNodesRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ListNodesRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+type ListNodesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Nodes         []*NodeInfo            `protobuf:"bytes,2,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNodesResponse) Reset() {
+	*x = ListNodesResponse{}
+	mi := &file_k8sts_v1_agent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNodesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNodesResponse) ProtoMessage() {}
+
+func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_k8sts_v1_agent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNodesResponse.ProtoReflect.Descriptor instead.
+func (*ListNodesResponse) Descriptor() ([]byte, []int) {
+	return file_k8sts_v1_agent_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ListNodesResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ListNodesResponse) GetNodes() []*NodeInfo {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+func (x *ListNodesResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 // AgentMessage is anything the agent sends up the stream to the hub.
 type AgentMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1143,6 +1348,7 @@ type AgentMessage struct {
 	//	*AgentMessage_ScanResponse
 	//	*AgentMessage_ApproveActionResponse
 	//	*AgentMessage_GetLogsResponse
+	//	*AgentMessage_ListNodesResponse
 	Payload       isAgentMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1150,7 +1356,7 @@ type AgentMessage struct {
 
 func (x *AgentMessage) Reset() {
 	*x = AgentMessage{}
-	mi := &file_k8sts_v1_agent_proto_msgTypes[15]
+	mi := &file_k8sts_v1_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1162,7 +1368,7 @@ func (x *AgentMessage) String() string {
 func (*AgentMessage) ProtoMessage() {}
 
 func (x *AgentMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_k8sts_v1_agent_proto_msgTypes[15]
+	mi := &file_k8sts_v1_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1175,7 +1381,7 @@ func (x *AgentMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentMessage.ProtoReflect.Descriptor instead.
 func (*AgentMessage) Descriptor() ([]byte, []int) {
-	return file_k8sts_v1_agent_proto_rawDescGZIP(), []int{15}
+	return file_k8sts_v1_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AgentMessage) GetPayload() isAgentMessage_Payload {
@@ -1239,6 +1445,15 @@ func (x *AgentMessage) GetGetLogsResponse() *GetLogsResponse {
 	return nil
 }
 
+func (x *AgentMessage) GetListNodesResponse() *ListNodesResponse {
+	if x != nil {
+		if x, ok := x.Payload.(*AgentMessage_ListNodesResponse); ok {
+			return x.ListNodesResponse
+		}
+	}
+	return nil
+}
+
 type isAgentMessage_Payload interface {
 	isAgentMessage_Payload()
 }
@@ -1267,6 +1482,10 @@ type AgentMessage_GetLogsResponse struct {
 	GetLogsResponse *GetLogsResponse `protobuf:"bytes,6,opt,name=get_logs_response,json=getLogsResponse,proto3,oneof"`
 }
 
+type AgentMessage_ListNodesResponse struct {
+	ListNodesResponse *ListNodesResponse `protobuf:"bytes,7,opt,name=list_nodes_response,json=listNodesResponse,proto3,oneof"`
+}
+
 func (*AgentMessage_Hello) isAgentMessage_Payload() {}
 
 func (*AgentMessage_DiagnoseResponse) isAgentMessage_Payload() {}
@@ -1279,6 +1498,8 @@ func (*AgentMessage_ApproveActionResponse) isAgentMessage_Payload() {}
 
 func (*AgentMessage_GetLogsResponse) isAgentMessage_Payload() {}
 
+func (*AgentMessage_ListNodesResponse) isAgentMessage_Payload() {}
+
 // HubMessage is anything the hub sends down the stream to the agent.
 type HubMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1289,6 +1510,7 @@ type HubMessage struct {
 	//	*HubMessage_ScanRequest
 	//	*HubMessage_ApproveActionRequest
 	//	*HubMessage_GetLogsRequest
+	//	*HubMessage_ListNodesRequest
 	Payload       isHubMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1296,7 +1518,7 @@ type HubMessage struct {
 
 func (x *HubMessage) Reset() {
 	*x = HubMessage{}
-	mi := &file_k8sts_v1_agent_proto_msgTypes[16]
+	mi := &file_k8sts_v1_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1308,7 +1530,7 @@ func (x *HubMessage) String() string {
 func (*HubMessage) ProtoMessage() {}
 
 func (x *HubMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_k8sts_v1_agent_proto_msgTypes[16]
+	mi := &file_k8sts_v1_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1321,7 +1543,7 @@ func (x *HubMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HubMessage.ProtoReflect.Descriptor instead.
 func (*HubMessage) Descriptor() ([]byte, []int) {
-	return file_k8sts_v1_agent_proto_rawDescGZIP(), []int{16}
+	return file_k8sts_v1_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *HubMessage) GetPayload() isHubMessage_Payload {
@@ -1376,6 +1598,15 @@ func (x *HubMessage) GetGetLogsRequest() *GetLogsRequest {
 	return nil
 }
 
+func (x *HubMessage) GetListNodesRequest() *ListNodesRequest {
+	if x != nil {
+		if x, ok := x.Payload.(*HubMessage_ListNodesRequest); ok {
+			return x.ListNodesRequest
+		}
+	}
+	return nil
+}
+
 type isHubMessage_Payload interface {
 	isHubMessage_Payload()
 }
@@ -1400,6 +1631,10 @@ type HubMessage_GetLogsRequest struct {
 	GetLogsRequest *GetLogsRequest `protobuf:"bytes,5,opt,name=get_logs_request,json=getLogsRequest,proto3,oneof"`
 }
 
+type HubMessage_ListNodesRequest struct {
+	ListNodesRequest *ListNodesRequest `protobuf:"bytes,6,opt,name=list_nodes_request,json=listNodesRequest,proto3,oneof"`
+}
+
 func (*HubMessage_DiagnoseRequest) isHubMessage_Payload() {}
 
 func (*HubMessage_ExecuteRequest) isHubMessage_Payload() {}
@@ -1409,6 +1644,8 @@ func (*HubMessage_ScanRequest) isHubMessage_Payload() {}
 func (*HubMessage_ApproveActionRequest) isHubMessage_Payload() {}
 
 func (*HubMessage_GetLogsRequest) isHubMessage_Payload() {}
+
+func (*HubMessage_ListNodesRequest) isHubMessage_Payload() {}
 
 var File_k8sts_v1_agent_proto protoreflect.FileDescriptor
 
@@ -1523,31 +1760,51 @@ const file_k8sts_v1_agent_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x12\n" +
 	"\x04logs\x18\x02 \x01(\tR\x04logs\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error\"\xb8\x03\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xa9\x01\n" +
+	"\bNodeInfo\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04zone\x18\x02 \x01(\tR\x04zone\x12\x16\n" +
+	"\x06region\x18\x03 \x01(\tR\x06region\x12#\n" +
+	"\rinstance_type\x18\x04 \x01(\tR\finstanceType\x12\"\n" +
+	"\farchitecture\x18\x05 \x01(\tR\farchitecture\x12\x14\n" +
+	"\x05ready\x18\x06 \x01(\bR\x05ready\"P\n" +
+	"\x10ListNodesRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\"r\n" +
+	"\x11ListNodesResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12(\n" +
+	"\x05nodes\x18\x02 \x03(\v2\x12.k8sts.v1.NodeInfoR\x05nodes\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x87\x04\n" +
 	"\fAgentMessage\x12'\n" +
 	"\x05hello\x18\x01 \x01(\v2\x0f.k8sts.v1.HelloH\x00R\x05hello\x12I\n" +
 	"\x11diagnose_response\x18\x02 \x01(\v2\x1a.k8sts.v1.DiagnoseResponseH\x00R\x10diagnoseResponse\x12F\n" +
 	"\x10execute_response\x18\x03 \x01(\v2\x19.k8sts.v1.ExecuteResponseH\x00R\x0fexecuteResponse\x12=\n" +
 	"\rscan_response\x18\x04 \x01(\v2\x16.k8sts.v1.ScanResponseH\x00R\fscanResponse\x12Y\n" +
 	"\x17approve_action_response\x18\x05 \x01(\v2\x1f.k8sts.v1.ApproveActionResponseH\x00R\x15approveActionResponse\x12G\n" +
-	"\x11get_logs_response\x18\x06 \x01(\v2\x19.k8sts.v1.GetLogsResponseH\x00R\x0fgetLogsResponseB\t\n" +
-	"\apayload\"\xfe\x02\n" +
+	"\x11get_logs_response\x18\x06 \x01(\v2\x19.k8sts.v1.GetLogsResponseH\x00R\x0fgetLogsResponse\x12M\n" +
+	"\x13list_nodes_response\x18\a \x01(\v2\x1b.k8sts.v1.ListNodesResponseH\x00R\x11listNodesResponseB\t\n" +
+	"\apayload\"\xca\x03\n" +
 	"\n" +
 	"HubMessage\x12F\n" +
 	"\x10diagnose_request\x18\x01 \x01(\v2\x19.k8sts.v1.DiagnoseRequestH\x00R\x0fdiagnoseRequest\x12C\n" +
 	"\x0fexecute_request\x18\x02 \x01(\v2\x18.k8sts.v1.ExecuteRequestH\x00R\x0eexecuteRequest\x12:\n" +
 	"\fscan_request\x18\x03 \x01(\v2\x15.k8sts.v1.ScanRequestH\x00R\vscanRequest\x12V\n" +
 	"\x16approve_action_request\x18\x04 \x01(\v2\x1e.k8sts.v1.ApproveActionRequestH\x00R\x14approveActionRequest\x12D\n" +
-	"\x10get_logs_request\x18\x05 \x01(\v2\x18.k8sts.v1.GetLogsRequestH\x00R\x0egetLogsRequestB\t\n" +
+	"\x10get_logs_request\x18\x05 \x01(\v2\x18.k8sts.v1.GetLogsRequestH\x00R\x0egetLogsRequest\x12J\n" +
+	"\x12list_nodes_request\x18\x06 \x01(\v2\x1a.k8sts.v1.ListNodesRequestH\x00R\x10listNodesRequestB\t\n" +
 	"\apayload2K\n" +
 	"\fAgentService\x12;\n" +
-	"\aSession\x12\x16.k8sts.v1.AgentMessage\x1a\x14.k8sts.v1.HubMessage(\x010\x012\xdd\x02\n" +
+	"\aSession\x12\x16.k8sts.v1.AgentMessage\x1a\x14.k8sts.v1.HubMessage(\x010\x012\xa3\x03\n" +
 	"\x0fInternalService\x12A\n" +
 	"\bDiagnose\x12\x19.k8sts.v1.DiagnoseRequest\x1a\x1a.k8sts.v1.DiagnoseResponse\x12>\n" +
 	"\aExecute\x12\x18.k8sts.v1.ExecuteRequest\x1a\x19.k8sts.v1.ExecuteResponse\x125\n" +
 	"\x04Scan\x12\x15.k8sts.v1.ScanRequest\x1a\x16.k8sts.v1.ScanResponse\x12P\n" +
 	"\rApproveAction\x12\x1e.k8sts.v1.ApproveActionRequest\x1a\x1f.k8sts.v1.ApproveActionResponse\x12>\n" +
-	"\aGetLogs\x12\x18.k8sts.v1.GetLogsRequest\x1a\x19.k8sts.v1.GetLogsResponseB=Z;github.com/chwiee/k8s-ts-mcp/internal/transport/gen/k8stsv1b\x06proto3"
+	"\aGetLogs\x12\x18.k8sts.v1.GetLogsRequest\x1a\x19.k8sts.v1.GetLogsResponse\x12D\n" +
+	"\tListNodes\x12\x1a.k8sts.v1.ListNodesRequest\x1a\x1b.k8sts.v1.ListNodesResponseB=Z;github.com/chwiee/k8s-ts-mcp/internal/transport/gen/k8stsv1b\x06proto3"
 
 var (
 	file_k8sts_v1_agent_proto_rawDescOnce sync.Once
@@ -1561,7 +1818,7 @@ func file_k8sts_v1_agent_proto_rawDescGZIP() []byte {
 	return file_k8sts_v1_agent_proto_rawDescData
 }
 
-var file_k8sts_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_k8sts_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_k8sts_v1_agent_proto_goTypes = []any{
 	(*Signal)(nil),                // 0: k8sts.v1.Signal
 	(*Hello)(nil),                 // 1: k8sts.v1.Hello
@@ -1578,49 +1835,57 @@ var file_k8sts_v1_agent_proto_goTypes = []any{
 	(*ApproveActionResponse)(nil), // 12: k8sts.v1.ApproveActionResponse
 	(*GetLogsRequest)(nil),        // 13: k8sts.v1.GetLogsRequest
 	(*GetLogsResponse)(nil),       // 14: k8sts.v1.GetLogsResponse
-	(*AgentMessage)(nil),          // 15: k8sts.v1.AgentMessage
-	(*HubMessage)(nil),            // 16: k8sts.v1.HubMessage
-	nil,                           // 17: k8sts.v1.DiagnoseResponse.MetaEntry
-	nil,                           // 18: k8sts.v1.ApproveActionRequest.MetaEntry
+	(*NodeInfo)(nil),              // 15: k8sts.v1.NodeInfo
+	(*ListNodesRequest)(nil),      // 16: k8sts.v1.ListNodesRequest
+	(*ListNodesResponse)(nil),     // 17: k8sts.v1.ListNodesResponse
+	(*AgentMessage)(nil),          // 18: k8sts.v1.AgentMessage
+	(*HubMessage)(nil),            // 19: k8sts.v1.HubMessage
+	nil,                           // 20: k8sts.v1.DiagnoseResponse.MetaEntry
+	nil,                           // 21: k8sts.v1.ApproveActionRequest.MetaEntry
 }
 var file_k8sts_v1_agent_proto_depIdxs = []int32{
 	0,  // 0: k8sts.v1.DiagnoseRequest.signal:type_name -> k8sts.v1.Signal
 	3,  // 1: k8sts.v1.DiagnoseResponse.proposed_actions:type_name -> k8sts.v1.ProposedAction
-	17, // 2: k8sts.v1.DiagnoseResponse.meta:type_name -> k8sts.v1.DiagnoseResponse.MetaEntry
+	20, // 2: k8sts.v1.DiagnoseResponse.meta:type_name -> k8sts.v1.DiagnoseResponse.MetaEntry
 	5,  // 3: k8sts.v1.ScanResponse.issues:type_name -> k8sts.v1.PodIssue
 	0,  // 4: k8sts.v1.ExecuteRequest.signal:type_name -> k8sts.v1.Signal
 	9,  // 5: k8sts.v1.ExecuteResponse.attempts:type_name -> k8sts.v1.Attempt
 	0,  // 6: k8sts.v1.ApproveActionRequest.signal:type_name -> k8sts.v1.Signal
-	18, // 7: k8sts.v1.ApproveActionRequest.meta:type_name -> k8sts.v1.ApproveActionRequest.MetaEntry
+	21, // 7: k8sts.v1.ApproveActionRequest.meta:type_name -> k8sts.v1.ApproveActionRequest.MetaEntry
 	9,  // 8: k8sts.v1.ApproveActionResponse.attempt:type_name -> k8sts.v1.Attempt
-	1,  // 9: k8sts.v1.AgentMessage.hello:type_name -> k8sts.v1.Hello
-	4,  // 10: k8sts.v1.AgentMessage.diagnose_response:type_name -> k8sts.v1.DiagnoseResponse
-	10, // 11: k8sts.v1.AgentMessage.execute_response:type_name -> k8sts.v1.ExecuteResponse
-	7,  // 12: k8sts.v1.AgentMessage.scan_response:type_name -> k8sts.v1.ScanResponse
-	12, // 13: k8sts.v1.AgentMessage.approve_action_response:type_name -> k8sts.v1.ApproveActionResponse
-	14, // 14: k8sts.v1.AgentMessage.get_logs_response:type_name -> k8sts.v1.GetLogsResponse
-	2,  // 15: k8sts.v1.HubMessage.diagnose_request:type_name -> k8sts.v1.DiagnoseRequest
-	8,  // 16: k8sts.v1.HubMessage.execute_request:type_name -> k8sts.v1.ExecuteRequest
-	6,  // 17: k8sts.v1.HubMessage.scan_request:type_name -> k8sts.v1.ScanRequest
-	11, // 18: k8sts.v1.HubMessage.approve_action_request:type_name -> k8sts.v1.ApproveActionRequest
-	13, // 19: k8sts.v1.HubMessage.get_logs_request:type_name -> k8sts.v1.GetLogsRequest
-	15, // 20: k8sts.v1.AgentService.Session:input_type -> k8sts.v1.AgentMessage
-	2,  // 21: k8sts.v1.InternalService.Diagnose:input_type -> k8sts.v1.DiagnoseRequest
-	8,  // 22: k8sts.v1.InternalService.Execute:input_type -> k8sts.v1.ExecuteRequest
-	6,  // 23: k8sts.v1.InternalService.Scan:input_type -> k8sts.v1.ScanRequest
-	11, // 24: k8sts.v1.InternalService.ApproveAction:input_type -> k8sts.v1.ApproveActionRequest
-	13, // 25: k8sts.v1.InternalService.GetLogs:input_type -> k8sts.v1.GetLogsRequest
-	16, // 26: k8sts.v1.AgentService.Session:output_type -> k8sts.v1.HubMessage
-	4,  // 27: k8sts.v1.InternalService.Diagnose:output_type -> k8sts.v1.DiagnoseResponse
-	10, // 28: k8sts.v1.InternalService.Execute:output_type -> k8sts.v1.ExecuteResponse
-	7,  // 29: k8sts.v1.InternalService.Scan:output_type -> k8sts.v1.ScanResponse
-	12, // 30: k8sts.v1.InternalService.ApproveAction:output_type -> k8sts.v1.ApproveActionResponse
-	14, // 31: k8sts.v1.InternalService.GetLogs:output_type -> k8sts.v1.GetLogsResponse
-	26, // [26:32] is the sub-list for method output_type
-	20, // [20:26] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	15, // 9: k8sts.v1.ListNodesResponse.nodes:type_name -> k8sts.v1.NodeInfo
+	1,  // 10: k8sts.v1.AgentMessage.hello:type_name -> k8sts.v1.Hello
+	4,  // 11: k8sts.v1.AgentMessage.diagnose_response:type_name -> k8sts.v1.DiagnoseResponse
+	10, // 12: k8sts.v1.AgentMessage.execute_response:type_name -> k8sts.v1.ExecuteResponse
+	7,  // 13: k8sts.v1.AgentMessage.scan_response:type_name -> k8sts.v1.ScanResponse
+	12, // 14: k8sts.v1.AgentMessage.approve_action_response:type_name -> k8sts.v1.ApproveActionResponse
+	14, // 15: k8sts.v1.AgentMessage.get_logs_response:type_name -> k8sts.v1.GetLogsResponse
+	17, // 16: k8sts.v1.AgentMessage.list_nodes_response:type_name -> k8sts.v1.ListNodesResponse
+	2,  // 17: k8sts.v1.HubMessage.diagnose_request:type_name -> k8sts.v1.DiagnoseRequest
+	8,  // 18: k8sts.v1.HubMessage.execute_request:type_name -> k8sts.v1.ExecuteRequest
+	6,  // 19: k8sts.v1.HubMessage.scan_request:type_name -> k8sts.v1.ScanRequest
+	11, // 20: k8sts.v1.HubMessage.approve_action_request:type_name -> k8sts.v1.ApproveActionRequest
+	13, // 21: k8sts.v1.HubMessage.get_logs_request:type_name -> k8sts.v1.GetLogsRequest
+	16, // 22: k8sts.v1.HubMessage.list_nodes_request:type_name -> k8sts.v1.ListNodesRequest
+	18, // 23: k8sts.v1.AgentService.Session:input_type -> k8sts.v1.AgentMessage
+	2,  // 24: k8sts.v1.InternalService.Diagnose:input_type -> k8sts.v1.DiagnoseRequest
+	8,  // 25: k8sts.v1.InternalService.Execute:input_type -> k8sts.v1.ExecuteRequest
+	6,  // 26: k8sts.v1.InternalService.Scan:input_type -> k8sts.v1.ScanRequest
+	11, // 27: k8sts.v1.InternalService.ApproveAction:input_type -> k8sts.v1.ApproveActionRequest
+	13, // 28: k8sts.v1.InternalService.GetLogs:input_type -> k8sts.v1.GetLogsRequest
+	16, // 29: k8sts.v1.InternalService.ListNodes:input_type -> k8sts.v1.ListNodesRequest
+	19, // 30: k8sts.v1.AgentService.Session:output_type -> k8sts.v1.HubMessage
+	4,  // 31: k8sts.v1.InternalService.Diagnose:output_type -> k8sts.v1.DiagnoseResponse
+	10, // 32: k8sts.v1.InternalService.Execute:output_type -> k8sts.v1.ExecuteResponse
+	7,  // 33: k8sts.v1.InternalService.Scan:output_type -> k8sts.v1.ScanResponse
+	12, // 34: k8sts.v1.InternalService.ApproveAction:output_type -> k8sts.v1.ApproveActionResponse
+	14, // 35: k8sts.v1.InternalService.GetLogs:output_type -> k8sts.v1.GetLogsResponse
+	17, // 36: k8sts.v1.InternalService.ListNodes:output_type -> k8sts.v1.ListNodesResponse
+	30, // [30:37] is the sub-list for method output_type
+	23, // [23:30] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_k8sts_v1_agent_proto_init() }
@@ -1628,20 +1893,22 @@ func file_k8sts_v1_agent_proto_init() {
 	if File_k8sts_v1_agent_proto != nil {
 		return
 	}
-	file_k8sts_v1_agent_proto_msgTypes[15].OneofWrappers = []any{
+	file_k8sts_v1_agent_proto_msgTypes[18].OneofWrappers = []any{
 		(*AgentMessage_Hello)(nil),
 		(*AgentMessage_DiagnoseResponse)(nil),
 		(*AgentMessage_ExecuteResponse)(nil),
 		(*AgentMessage_ScanResponse)(nil),
 		(*AgentMessage_ApproveActionResponse)(nil),
 		(*AgentMessage_GetLogsResponse)(nil),
+		(*AgentMessage_ListNodesResponse)(nil),
 	}
-	file_k8sts_v1_agent_proto_msgTypes[16].OneofWrappers = []any{
+	file_k8sts_v1_agent_proto_msgTypes[19].OneofWrappers = []any{
 		(*HubMessage_DiagnoseRequest)(nil),
 		(*HubMessage_ExecuteRequest)(nil),
 		(*HubMessage_ScanRequest)(nil),
 		(*HubMessage_ApproveActionRequest)(nil),
 		(*HubMessage_GetLogsRequest)(nil),
+		(*HubMessage_ListNodesRequest)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1649,7 +1916,7 @@ func file_k8sts_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_k8sts_v1_agent_proto_rawDesc), len(file_k8sts_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
