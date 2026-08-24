@@ -1,0 +1,45 @@
+# Post-mortem: {{.PlaybookID}}
+
+- **ID do incidente:** {{.ID}}
+- **Cluster:** {{.ClusterID}}
+- **Data/hora:** {{.Time.Format "2006-01-02 15:04:05 MST"}}
+- **Solicitado por (grupos):** {{range $i, $g := .Groups}}{{if $i}}, {{end}}{{$g}}{{end}}
+- **Status:** {{statusOf .}}
+
+## Causa
+
+{{.Summary}}
+
+## Decisão de política
+
+- Permitido: {{.Decision.Allow}}
+- Dry-run: {{.Decision.DryRun}}
+- Motivo: {{.Decision.Reason}}
+{{if .ProposedCommands}}
+## Comandos propostos (não executados)
+{{range .ProposedCommands}}
+- {{.}}
+{{- end}}
+{{end}}
+{{if .Result}}
+## Linha do tempo de ações executadas
+{{range $i, $a := .Result.Attempts}}
+{{inc $i}}. **{{$a.Action}}** (risco: {{$a.Risk}}){{if $a.Skipped}} — NÃO EXECUTADA (requer aprovação manual){{end}}
+{{- if $a.Description}}
+   - Comando: {{$a.Description}}
+{{- end}}
+{{- if not $a.Skipped}}
+   - Resultado: {{if $a.Output}}{{$a.Output}}{{else}}(sem saída){{end}}
+   - Validado: {{$a.Validated}}
+{{- end}}
+{{- if $a.Err}}
+   - Erro: {{$a.Err}}
+{{- end}}
+{{- if $a.RolledBack}}
+   - Revertido: sim
+{{- end}}
+{{end}}
+## Resolução
+
+{{if .Result.Resolved}}Incidente resolvido pela ação acima marcada como validada.{{else}}Nenhuma das {{len .Result.Attempts}} ações da escada resolveu o incidente. Intervenção manual necessária — ver comandos e erros acima.{{end}}
+{{end}}
