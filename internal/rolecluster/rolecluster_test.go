@@ -3,66 +3,113 @@ package rolecluster
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
+	"github.com/chwiee/k8s-ts-mcp/internal/inventory"
 	"github.com/chwiee/k8s-ts-mcp/internal/k8sclient"
 )
 
-func TestLoadConfig(t *testing.T) {
-	doc := `
-clusters:
-  - cluster_id: spoke-role-1
-    role_arn: arn:aws:iam::111122223333:role/eks-readonly
-    eks_cluster_name: prod-1
-    region: us-east-1
-  - cluster_id: spoke-role-2
-    role_arn: arn:aws:iam::444455556666:role/eks-readonly
-    eks_cluster_name: prod-2
-    region: eu-west-1
-`
-	cfg, err := LoadConfig(strings.NewReader(doc))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if len(cfg.Clusters) != 2 {
-		t.Fatalf("len(Clusters) = %d, want 2", len(cfg.Clusters))
-	}
-	if cfg.Clusters[0].ClusterID != "spoke-role-1" || cfg.Clusters[0].RoleARN != "arn:aws:iam::111122223333:role/eks-readonly" {
-		t.Errorf("Clusters[0] = %+v", cfg.Clusters[0])
-	}
+// fakeInventory is a minimal inventory.Lookup for tests — no YAML, no HTTP,
+// just a fixed map plus an optional forced error to exercise Manager's
+// error handling.
+type fakeInventory struct {
+	byID map[string]inventory.ClusterInfo
+	err  error
 }
 
-func TestLoadConfig_MissingField(t *testing.T) {
-	doc := `
-clusters:
-  - cluster_id: spoke-role-1
-    role_arn: arn:aws:iam::111122223333:role/eks-readonly
-    region: us-east-1
-`
-	_, err := LoadConfig(strings.NewReader(doc))
-	if err == nil {
-		t.Fatal("LoadConfig accepted an entry missing eks_cluster_name, want an error")
+func (f *fakeInventory) Lookup(_ context.Context, clusterID string) (inventory.ClusterInfo, bool, error) {
+	if f.err != nil {
+		return inventory.ClusterInfo{}, false, f.err
+	}
+	info, ok := f.byID[clusterID]
+	return info, ok, nil
+}
+
+func TestRoleARNForAccount(t *testing.T) {
+	got := roleARNForAccount("123456789012")
+	want := "arn:aws:iam::123456789012:role/k8s-ts-mcp-readonly"
+	if got != want {
+		t.Errorf("roleARNForAccount = %q, want %q", got, want)
 	}
 }
 
 func TestManager_Handler_UnknownClusterNotFound(t *testing.T) {
-	m := NewManager(nil, nil)
+	m := NewManager(&fakeInventory{}, nil)
 	h, ok, err := m.Handler(context.Background(), "does-not-exist")
 	if err != nil {
 		t.Fatalf("Handler: %v", err)
 	}
 	if ok {
-		t.Error("ok = true for an unconfigured cluster_id, want false")
+		t.Error("ok = true for a cluster_id the inventory doesn't know, want false")
 	}
 	if h != nil {
-		t.Error("Handler != nil for an unconfigured cluster_id, want nil")
+		t.Error("Handler != nil for an unknown cluster_id, want nil")
+	}
+}
+
+func TestManager_Handler_NilInventoryNotFound(t *testing.T) {
+	m := NewManager(nil, nil)
+	_, ok, err := m.Handler(context.Background(), "spoke-role-1")
+	if err != nil || ok {
+		t.Errorf("Handler with nil Inventory = (ok=%v, err=%v), want (false, nil) — falls through to the gRPC agent path", ok, err)
+	}
+}
+
+func TestManager_Handler_BuildsFromInventoryByConvention(t *testing.T) {
+	inv := &fakeInventory{byID: map[string]inventory.ClusterInfo{
+		"spoke-role-1": {AWSAccountID: "000000000000", Region: "us-east-1", EKSClusterName: "probe-cluster"},
+	}}
+	m := NewManager(inv, nil)
+
+	var gotRoleARN, gotEKSName, gotRegion string
+	m.newClient = func(ctx context.Context, roleARN, eksClusterName, region string) (*k8sclient.Client, error) {
+		gotRoleARN, gotEKSName, gotRegion = roleARN, eksClusterName, region
+		return &k8sclient.Client{}, nil
+	}
+
+	h, ok, err := m.Handler(context.Background(), "spoke-role-1")
+	if err != nil || !ok || h == nil {
+		t.Fatalf("Handler: h=%v ok=%v err=%v", h, ok, err)
+	}
+	if gotRoleARN != "arn:aws:iam::000000000000:role/k8s-ts-mcp-readonly" {
+		t.Errorf("roleARN = %q", gotRoleARN)
+	}
+	if gotEKSName != "probe-cluster" {
+		t.Errorf("eksClusterName = %q, want the inventory's eks_cluster_name", gotEKSName)
+	}
+	if gotRegion != "us-east-1" {
+		t.Errorf("region = %q", gotRegion)
+	}
+}
+
+func TestManager_Handler_EKSClusterNameFallsBackToClusterID(t *testing.T) {
+	// No eks_cluster_name in the inventory entry — by convention, the
+	// cluster_id itself is the EKS cluster name.
+	inv := &fakeInventory{byID: map[string]inventory.ClusterInfo{
+		"mars-prod-1": {AWSAccountID: "123456789012", Region: "us-east-1"},
+	}}
+	m := NewManager(inv, nil)
+
+	var gotEKSName string
+	m.newClient = func(ctx context.Context, roleARN, eksClusterName, region string) (*k8sclient.Client, error) {
+		gotEKSName = eksClusterName
+		return &k8sclient.Client{}, nil
+	}
+
+	if _, ok, err := m.Handler(context.Background(), "mars-prod-1"); err != nil || !ok {
+		t.Fatalf("Handler: ok=%v err=%v", ok, err)
+	}
+	if gotEKSName != "mars-prod-1" {
+		t.Errorf("eksClusterName = %q, want mars-prod-1 (falls back to cluster_id)", gotEKSName)
 	}
 }
 
 func TestManager_Handler_BuildsOnceAndCaches(t *testing.T) {
 	calls := 0
-	m := NewManager([]ClusterConfig{{ClusterID: "spoke-role-1", RoleARN: "arn:x", EKSCluster: "prod-1", Region: "us-east-1"}}, nil)
+	inv := &fakeInventory{byID: map[string]inventory.ClusterInfo{
+		"spoke-role-1": {AWSAccountID: "000000000000", Region: "us-east-1"},
+	}}
+	m := NewManager(inv, nil)
 	m.newClient = func(ctx context.Context, roleARN, eksClusterName, region string) (*k8sclient.Client, error) {
 		calls++
 		return &k8sclient.Client{}, nil
@@ -87,7 +134,10 @@ func TestManager_Handler_BuildsOnceAndCaches(t *testing.T) {
 
 func TestManager_Handler_BuildErrorNotCached(t *testing.T) {
 	calls := 0
-	m := NewManager([]ClusterConfig{{ClusterID: "spoke-role-1", RoleARN: "arn:x", EKSCluster: "prod-1", Region: "us-east-1"}}, nil)
+	inv := &fakeInventory{byID: map[string]inventory.ClusterInfo{
+		"spoke-role-1": {AWSAccountID: "000000000000", Region: "us-east-1"},
+	}}
+	m := NewManager(inv, nil)
 	m.newClient = func(ctx context.Context, roleARN, eksClusterName, region string) (*k8sclient.Client, error) {
 		calls++
 		if calls == 1 {
@@ -102,7 +152,7 @@ func TestManager_Handler_BuildErrorNotCached(t *testing.T) {
 		t.Fatal("Handler: expected the build error to propagate")
 	}
 	if !ok {
-		t.Error("ok = false on a build error, want true — the cluster IS configured here, it just failed to build")
+		t.Error("ok = false on a build error, want true — the cluster IS in the inventory, it just failed to build")
 	}
 	if h != nil {
 		t.Error("Handler != nil alongside a build error, want nil")
@@ -119,19 +169,28 @@ func TestManager_Handler_BuildErrorNotCached(t *testing.T) {
 	}
 }
 
-func TestManager_ClusterIDs(t *testing.T) {
-	m := NewManager([]ClusterConfig{
-		{ClusterID: "spoke-role-1", RoleARN: "arn:x", EKSCluster: "prod-1", Region: "us-east-1"},
-		{ClusterID: "spoke-role-2", RoleARN: "arn:y", EKSCluster: "prod-2", Region: "eu-west-1"},
-	}, nil)
-	ids := m.ClusterIDs()
-	if len(ids) != 2 {
-		t.Fatalf("ClusterIDs() = %v, want 2 entries", ids)
+func TestManager_Handler_InventoryLookupError(t *testing.T) {
+	inv := &fakeInventory{err: errors.New("inventory API unreachable")}
+	m := NewManager(inv, nil)
+
+	h, ok, err := m.Handler(context.Background(), "spoke-role-1")
+	if err == nil {
+		t.Fatal("Handler: expected the inventory lookup error to propagate")
 	}
-	want := map[string]bool{"spoke-role-1": true, "spoke-role-2": true}
-	for _, id := range ids {
-		if !want[id] {
-			t.Errorf("unexpected cluster id %q", id)
-		}
+	if !ok {
+		t.Error("ok = false on an inventory lookup error, want true — distinct from 'cluster unknown'")
+	}
+	if h != nil {
+		t.Error("Handler != nil alongside a lookup error, want nil")
+	}
+}
+
+func TestManager_ClusterIDs_AlwaysEmpty(t *testing.T) {
+	inv := &fakeInventory{byID: map[string]inventory.ClusterInfo{
+		"spoke-role-1": {AWSAccountID: "000000000000", Region: "us-east-1"},
+	}}
+	m := NewManager(inv, nil)
+	if ids := m.ClusterIDs(); ids != nil {
+		t.Errorf("ClusterIDs() = %v, want nil — discovery-by-convention has no catalog to enumerate", ids)
 	}
 }
