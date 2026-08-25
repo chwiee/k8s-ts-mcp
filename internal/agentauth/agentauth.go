@@ -5,6 +5,16 @@
 // stable config (one entry per team/agent) — see internal/inventory and
 // internal/rolecluster for why adding a *cluster* never needs to touch this:
 // only onboarding a brand new team/agent does.
+//
+// Each token also carries a simulated AD group membership (ADGroups) — the
+// real caller-identity/SSO propagation described as a known gap in
+// docs/ARCHITECTURE.md doesn't exist yet, so this is the stand-in used to
+// exercise policy.Engine's tier gating and mcptools.ToolAccess's tool
+// visibility end-to-end without it. One token now doubles as "which AWS
+// accounts" AND "which AD groups" a simulated caller has — cmd/hub-server
+// wires ADGroups into the per-session Server.CallerGroups the same way
+// AllowedAccounts feeds AgentScope. Swapping this for real SSO later only
+// touches how a Scope gets built (LoadConfig/NewRegistry), not any caller.
 package agentauth
 
 import (
@@ -22,6 +32,12 @@ import (
 type Scope struct {
 	AgentName       string
 	AllowedAccounts map[string]bool
+	// ADGroups simulates the AD/SSO group membership a real identity
+	// provider would assert for this caller — see the package doc comment.
+	// Fed into mcptools.Server.CallerGroups per session, the same input
+	// policy.Engine's tier resolution and mcptools.ToolAccess's tool
+	// visibility already gate on.
+	ADGroups []string
 }
 
 // AllowsAccount reports whether accountID is in scope.
@@ -40,9 +56,11 @@ func (s *Scope) AllowsAccount(accountID string) bool {
 	return s.AllowedAccounts[accountID]
 }
 
-// DenyAllScope authorizes no AWS account at all. Use this — never nil, see
-// AllowsAccount's doc comment — when a hub with --agent-scopes-config
-// configured receives a request with a missing or unrecognized token.
+// DenyAllScope authorizes no AWS account at all, and carries no AD groups —
+// a caller with this Scope is anonymous as far as policy.Engine/ToolAccess
+// are concerned too. Use this — never nil, see AllowsAccount's doc comment —
+// when a hub with --agent-scopes-config configured receives a request with
+// a missing or unrecognized token.
 var DenyAllScope = &Scope{AgentName: "", AllowedAccounts: map[string]bool{}}
 
 // AgentConfig is one entry in --agent-scopes-config's YAML.
@@ -50,6 +68,10 @@ type AgentConfig struct {
 	Name            string   `yaml:"name"`
 	Token           string   `yaml:"token"`
 	AllowedAccounts []string `yaml:"allowed_accounts"`
+	// ADGroups is optional — an entry with none still authenticates (gets a
+	// real AWS account scope) but simulates a caller with no AD group
+	// membership at all, same as a real unauthenticated-for-tier caller.
+	ADGroups []string `yaml:"ad_groups,omitempty"`
 }
 
 // Config is the top-level shape of --agent-scopes-config's YAML file.
@@ -88,7 +110,7 @@ func NewRegistry(agents []AgentConfig) *Registry {
 		for _, acct := range a.AllowedAccounts {
 			allowed[acct] = true
 		}
-		byTokenHash[hashToken(a.Token)] = &Scope{AgentName: a.Name, AllowedAccounts: allowed}
+		byTokenHash[hashToken(a.Token)] = &Scope{AgentName: a.Name, AllowedAccounts: allowed, ADGroups: a.ADGroups}
 	}
 	return &Registry{byTokenHash: byTokenHash}
 }

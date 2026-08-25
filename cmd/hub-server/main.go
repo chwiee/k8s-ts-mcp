@@ -48,7 +48,7 @@ func main() {
 	auditPath := flag.String("audit-path", envOr("AUDIT_PATH", "audit.jsonl"), "caminho do arquivo de auditoria (JSONL)")
 	executionFlag := flag.Bool("execution-enabled", os.Getenv("EXECUTION_ENABLED") == "true", "flag global: permite executar ações (não só propor)")
 	prodClustersCSV := flag.String("prod-clusters", envOr("PROD_CLUSTERS", ""), "lista separada por vírgula de cluster_id considerados prod")
-	testCallerGroupsCSV := flag.String("test-caller-groups", envOr("TEST_CALLER_GROUPS", "infra-prod-admins"), "TEMPORÁRIO: grupos AD usados pra toda chamada, até a identidade real do chamador ser propagada")
+	testCallerGroupsCSV := flag.String("test-caller-groups", envOr("TEST_CALLER_GROUPS", "infra-prod-admins"), "TEMPORÁRIO: grupos AD usados pra toda chamada quando --agent-scopes-config não está configurado (ou não tem ad_groups na entrada do token) — ver internal/agentauth para o caminho por sessão via token, que tem prioridade sobre este flag")
 	redisAddr := flag.String("redis-addr", envOr("REDIS_ADDR", ""), "endereço host:porta do Redis compartilhado entre réplicas (vazio = modo réplica única, registro só em memória — nunca use vazio com mais de 1 réplica)")
 	selfAddr := flag.String("self-addr", envOr("SELF_ADDR", ""), "endereço desta réplica, alcançável por outras réplicas (ex: $(POD_IP):7443) — obrigatório se --redis-addr for informado")
 	runbooksPath := flag.String("runbooks-path", envOr("RUNBOOKS_PATH", ""), "caminho do markdown de runbooks (ver docs/runbooks/kubernetes-errors.md) — vazio desliga o fallback pra sinais sem playbook automatizado")
@@ -222,13 +222,15 @@ func main() {
 	// newSessionServer builds a fresh *mcp.Server per new MCP session (the
 	// go-sdk's Streamable HTTP handler calls this once per session, with
 	// that session's initiating request — see NewStreamableHTTPHandler's
-	// doc comment), resolving AgentScope from the session's Authorization
-	// header. This is deliberately NOT one shared *mcp.Server for every
-	// caller: AgentScope has to be per-caller, and mcptools.Server is a
-	// plain struct (not goroutine-shared mutable state beyond the pointers
-	// it holds), so a cheap shallow copy per session is enough — Hub/
-	// Policy/Audit/Runbooks/Inventory stay the same shared instances,
-	// only AgentScope differs.
+	// doc comment), resolving AgentScope (and, simulating real AD/SSO
+	// propagation until that exists — see internal/agentauth's doc comment
+	// — CallerGroups too) from the session's Authorization header. This is
+	// deliberately NOT one shared *mcp.Server for every caller: both have to
+	// be per-caller, and mcptools.Server is a plain struct (not goroutine-
+	// shared mutable state beyond the pointers it holds), so a cheap
+	// shallow copy per session is enough — Hub/Policy/Audit/Runbooks/
+	// Inventory stay the same shared instances, only AgentScope/
+	// CallerGroups differ.
 	newSessionServer := func(req *http.Request) *mcp.Server {
 		sessionTools := *tools
 		if agentRegistry != nil {
@@ -237,13 +239,19 @@ func main() {
 			if !ok {
 				// A hub with --agent-scopes-config configured requires a
 				// valid token on every session — a missing or unrecognized
-				// one must fail closed (deny every account), never fall
-				// back to AgentScope==nil's permissive default, which is
-				// reserved for "no --agent-scopes-config at all."
+				// one must fail closed (deny every account and every
+				// group), never fall back to AgentScope==nil's permissive
+				// default, which is reserved for "no --agent-scopes-config
+				// at all."
 				log.Printf("hub-server: sessão MCP sem token de agente reconhecido — negando acesso a qualquer conta")
 				scope = agentauth.DenyAllScope
 			}
 			sessionTools.AgentScope = scope
+			// scope.ADGroups is the simulated-AD stand-in (see
+			// internal/agentauth) — it replaces the --test-caller-groups
+			// global stub per session once a token resolves, rather than
+			// every caller on this hub sharing one identity.
+			sessionTools.CallerGroups = scope.ADGroups
 		}
 
 		srv := mcp.NewServer(&mcp.Implementation{
